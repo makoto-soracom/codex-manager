@@ -84,18 +84,25 @@ func metaFromLine(lineText string) *SessionMeta {
 	if err := json.Unmarshal([]byte(lineText), &metaLine); err != nil {
 		return nil
 	}
-	if metaLine.ID == "" && metaLine.Timestamp == "" && metaLine.Cwd == "" && metaLine.Originator == "" && metaLine.CliVersion == "" && metaLine.Instructions == nil {
+	if metaLine.ID == "" && metaLine.ForkedFromID == "" && metaLine.Timestamp == "" && metaLine.Cwd == "" && metaLine.Git == nil && metaLine.Originator == "" && metaLine.CliVersion == "" && metaLine.AgentNickname == "" && metaLine.AgentRole == "" && metaLine.Source == nil && metaLine.Instructions == nil && metaLine.BaseInstructions == nil {
 		return nil
 	}
 	out := SessionMeta{
-		ID:         metaLine.ID,
-		Timestamp:  metaLine.Timestamp,
-		Cwd:        metaLine.Cwd,
-		Originator: metaLine.Originator,
-		CliVersion: metaLine.CliVersion,
+		ID:            metaLine.ID,
+		ForkedFromID:  metaLine.ForkedFromID,
+		Timestamp:     metaLine.Timestamp,
+		Cwd:           metaLine.Cwd,
+		Git:           metaLine.Git,
+		Originator:    metaLine.Originator,
+		CliVersion:    metaLine.CliVersion,
+		AgentNickname: metaLine.AgentNickname,
+		AgentRole:     metaLine.AgentRole,
+		Source:        metaLine.Source,
 	}
 	if metaLine.Instructions != nil {
 		out.Instructions = *metaLine.Instructions
+	} else if metaLine.BaseInstructions != nil {
+		out.Instructions = metaLine.BaseInstructions.Text
 	}
 	return &out
 }

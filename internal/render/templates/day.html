@@ -9,15 +9,121 @@
 </head>
 <body class="{{ .ThemeClass }}">
   <header>
-    <p class="subtitle"><a href="/">All dates</a>{{ if .SelectedCwd }} / <a href="/?view=dir">All directories</a> / <a href="/dir?cwd={{ .SelectedCwd | urlquery }}">Directory dates</a>{{ end }}</p>
+    <p class="subtitle"><a href="/">All dates</a> / <a href="/active">Active threads</a> / <a href="/notifications">Notifications</a>{{ if .SelectedCwd }} / <a href="/?view=dir">All directories</a> / <a href="/dir?cwd={{ .SelectedCwd | urlquery }}">Directory dates</a>{{ end }}</p>
     <h1 class="page-title">Sessions on {{ .Date.Label }}{{ if .SelectedCwdLabel }} – {{ .SelectedCwdLabel }}{{ end }}</h1>
     {{ if .SelectedCwd }}
-    <p class="meta">Directory filter active. <a href="/{{ .Date.Path }}/">Clear filter</a> / <a href="/dir?cwd={{ .SelectedCwd | urlquery }}">View directory dates</a></p>
+    <p class="meta">Directory filter active. <a href="/{{ .Date.Path }}/">Clear directory filter</a></p>
+    {{ end }}
+    <form class="filter-form" method="get" action="/{{ .Date.Path }}/">
+      {{ if .SelectedCwd }}<input type="hidden" name="cwd" value="{{ .SelectedCwd }}">{{ end }}
+      <input type="hidden" name="page" value="1">
+      <label class="filter-toggle">
+        <input class="filter-checkbox" type="checkbox" name="all" value="1"{{ if .ShowAll }} checked{{ end }} onchange="this.form.submit()">
+        <span class="filter-label">Show all (including threads without user messages)</span>
+      </label>
+    </form>
+    {{ if .ActiveTabs }}
+    <div class="tabs">
+      {{ range .ActiveTabs }}
+      <a class="tab {{ if .Active }}active{{ end }}" href="{{ .Path }}">{{ .Label }}</a>
+      {{ end }}
+    </div>
     {{ end }}
   </header>
   <main>
+    {{ if .SelectedCwd }}
+    <div class="card search-card">
+      <label class="search-label" for="search-input">Search in {{ .SelectedCwdLabel }}</label>
+      <input id="search-input" class="search-input" type="search" placeholder="Search within this directory" autocomplete="off" spellcheck="false" data-cwd="{{ .SelectedCwd }}">
+      <p id="search-status" class="meta search-status"></p>
+      <ul id="search-results" class="list search-results"></ul>
+    </div>
+    {{ end }}
+    {{ if .FallbackDate }}
+    <div class="card" data-session-list>
+      <p>No sessions found for this directory today.</p>
+    </div>
+    <hr>
+    <p class="meta">--- Previous Day ---</p>
+    <div class="card" data-dir-filter>
+      <p class="meta">Filter by directory (click to filter sessions below)</p>
+      <ul class="list link-list">
+        {{ range .FallbackDirs }}
+        <li class="dir-filter-item{{ if eq $.SelectedCwd .Value }} selected{{ end }}">
+          <a class="link-item-link" href="/{{ $.Date.Path }}/?cwd={{ .Value | urlquery }}">
+            {{ .Label }}
+            <span class="meta">{{ .Count }} session{{ if ne .Count 1 }}s{{ end }}</span>
+            {{ if eq $.SelectedCwd .Value }}<span class="tag">Selected</span>{{ end }}
+          </a>
+        </li>
+        {{ end }}
+      </ul>
+    </div>
+    {{ if or .HasPrev .HasNext (gt .TotalPages 1) }}
+    <div class="pagination">
+      {{ if .HasPrev }}
+      <a class="nav-btn" href="/{{ $.Date.Path }}/?{{ if $.SelectedCwd }}cwd={{ $.SelectedCwd | urlquery }}&{{ end }}page={{ .PrevPage }}{{ if $.ShowAll }}&all=1{{ end }}">⬅️ Prev</a>
+      {{ else }}
+      <span class="nav-btn disabled">⬅️ Prev</span>
+      {{ end }}
+      <span class="page-meta">Page {{ .Page }}{{ if gt .TotalPages 0 }} / {{ .TotalPages }}{{ end }}</span>
+      {{ if .HasNext }}
+      <a class="nav-btn" href="/{{ $.Date.Path }}/?{{ if $.SelectedCwd }}cwd={{ $.SelectedCwd | urlquery }}&{{ end }}page={{ .NextPage }}{{ if $.ShowAll }}&all=1{{ end }}">Next ➡️</a>
+      {{ else }}
+      <span class="nav-btn disabled">Next ➡️</span>
+      {{ end }}
+    </div>
+    {{ end }}
+    <div class="card" data-session-list>
+      {{ if .FallbackSessions }}
+      <ul class="list link-list">
+        {{ range $index, $session := .FallbackSessions }}
+        <li class="session-list-item{{ if $session.ThreadStatusClass }} thread-status-{{ $session.ThreadStatusClass }}{{ end }}">
+          <div class="active-session-header">
+            <div class="active-session-title">
+              <a class="link-item-link" href="/{{ $.FallbackDate.Path }}/{{ $session.Name }}#last-item">
+                {{ $session.DisplayName }}
+              </a>
+              <span class="meta">{{ $session.Size }} | {{ $session.ModTime }}{{ if $session.Cwd }} | {{ $session.Cwd }}{{ end }}{{ if $session.Branch }} | Branch: {{ $session.Branch }}{{ end }}</span>
+            </div>
+            {{ if or $session.ThreadStatusLabel $session.ThreadStateKey }}
+            <div class="active-session-actions">
+              {{ if $session.ThreadStatusLabel }}<span class="tag tag-status-{{ $session.ThreadStatusClass }}">{{ $session.ThreadStatusLabel }}</span>{{ end }}
+              {{ if $session.ThreadStateKey }}<button class="nav-btn" type="button" data-active-action="{{ $session.ThreadAction }}" data-active-key="{{ $session.ThreadStateKey }}">{{ $session.ThreadActionLabel }}</button>{{ end }}
+            </div>
+            {{ end }}
+          </div>
+          {{ if or $session.LastUserSnippet $session.LastAssistantSnippet }}
+          <div class="session-snippet session-snippet-thread">
+            {{ if $session.LastUserSnippet }}<div class="snippet-divider">：</div>{{ end }}
+            {{ if $session.LastUserSnippet }}
+            <a class="snippet-link" href="/{{ $.FallbackDate.Path }}/{{ $session.Name }}#last-item">
+              <div class="session-item snippet-item snippet-item-right speaker-{{ $session.LastUserSnippetClass }}">
+                <div class="snippet-speaker">{{ $session.LastUserSnippetTitle }}</div>
+                <div class="session-content">{{ $session.LastUserSnippet }}</div>
+              </div>
+            </a>
+            {{ end }}
+            {{ if $session.LastAssistantSnippet }}
+            <a class="snippet-link" href="/{{ $.FallbackDate.Path }}/{{ $session.Name }}#last-item">
+              <div class="session-item snippet-item snippet-item-left speaker-{{ $session.LastAssistantSnippetClass }}">
+                <div class="snippet-speaker">{{ $session.LastAssistantSnippetTitle }}</div>
+                <div class="session-content">{{ $session.LastAssistantSnippet }}</div>
+              </div>
+            </a>
+            {{ end }}
+          </div>
+          {{ end }}
+        </li>
+        {{ end }}
+      </ul>
+      {{ else }}
+      <p class="meta">No sessions found for this directory.</p>
+      {{ end }}
+    </div>
+    {{ else }}
     {{ if .Dirs }}
-    <div class="card">
+    <div class="card" data-dir-filter>
       <p class="meta">Filter by directory (click to filter sessions below)</p>
       <ul class="list link-list">
         {{ range .Dirs }}
@@ -32,15 +138,61 @@
       </ul>
     </div>
     {{ end }}
-    <div class="card">
+    {{ if or .HasPrev .HasNext (gt .TotalPages 1) }}
+    <div class="pagination">
+      {{ if .HasPrev }}
+      <a class="nav-btn" href="/{{ $.Date.Path }}/?{{ if $.SelectedCwd }}cwd={{ $.SelectedCwd | urlquery }}&{{ end }}page={{ .PrevPage }}{{ if $.ShowAll }}&all=1{{ end }}">⬅️ Prev</a>
+      {{ else }}
+      <span class="nav-btn disabled">⬅️ Prev</span>
+      {{ end }}
+      <span class="page-meta">Page {{ .Page }}{{ if gt .TotalPages 0 }} / {{ .TotalPages }}{{ end }}</span>
+      {{ if .HasNext }}
+      <a class="nav-btn" href="/{{ $.Date.Path }}/?{{ if $.SelectedCwd }}cwd={{ $.SelectedCwd | urlquery }}&{{ end }}page={{ .NextPage }}{{ if $.ShowAll }}&all=1{{ end }}">Next ➡️</a>
+      {{ else }}
+      <span class="nav-btn disabled">Next ➡️</span>
+      {{ end }}
+    </div>
+    {{ end }}
+    <div class="card" data-session-list>
       {{ if .Sessions }}
       <ul class="list link-list">
         {{ range $index, $session := .Sessions }}
-        <li>
-          <a class="link-item-link" href="/{{ $.Date.Path }}/{{ $session.Name }}">
-            {{ $session.Name }}
-            <span class="meta">{{ $session.Size }} | {{ $session.ModTime }}{{ if $session.Cwd }} | {{ $session.Cwd }}{{ end }}</span>
-          </a>
+        <li class="session-list-item{{ if $session.ThreadStatusClass }} thread-status-{{ $session.ThreadStatusClass }}{{ end }}">
+          <div class="active-session-header">
+            <div class="active-session-title">
+              <a class="link-item-link" href="/{{ $.Date.Path }}/{{ $session.Name }}#last-item">
+                {{ $session.DisplayName }}
+              </a>
+              <span class="meta">{{ $session.Size }} | {{ $session.ModTime }}{{ if $session.Cwd }} | {{ $session.Cwd }}{{ end }}{{ if $session.Branch }} | Branch: {{ $session.Branch }}{{ end }}</span>
+            </div>
+            {{ if or $session.ThreadStatusLabel $session.ThreadStateKey }}
+            <div class="active-session-actions">
+              {{ if $session.ThreadStatusLabel }}<span class="tag tag-status-{{ $session.ThreadStatusClass }}">{{ $session.ThreadStatusLabel }}</span>{{ end }}
+              {{ if $session.ThreadStateKey }}<button class="nav-btn" type="button" data-active-action="{{ $session.ThreadAction }}" data-active-key="{{ $session.ThreadStateKey }}">{{ $session.ThreadActionLabel }}</button>{{ end }}
+            </div>
+            {{ end }}
+          </div>
+          {{ if or $session.LastUserSnippet $session.LastAssistantSnippet }}
+          <div class="session-snippet session-snippet-thread">
+            {{ if $session.LastUserSnippet }}<div class="snippet-divider">：</div>{{ end }}
+            {{ if $session.LastUserSnippet }}
+            <a class="snippet-link" href="/{{ $.Date.Path }}/{{ $session.Name }}#last-item">
+              <div class="session-item snippet-item snippet-item-right speaker-{{ $session.LastUserSnippetClass }}">
+                <div class="snippet-speaker">{{ $session.LastUserSnippetTitle }}</div>
+                <div class="session-content">{{ $session.LastUserSnippet }}</div>
+              </div>
+            </a>
+            {{ end }}
+            {{ if $session.LastAssistantSnippet }}
+            <a class="snippet-link" href="/{{ $.Date.Path }}/{{ $session.Name }}#last-item">
+              <div class="session-item snippet-item snippet-item-left speaker-{{ $session.LastAssistantSnippetClass }}">
+                <div class="snippet-speaker">{{ $session.LastAssistantSnippetTitle }}</div>
+                <div class="session-content">{{ $session.LastAssistantSnippet }}</div>
+              </div>
+            </a>
+            {{ end }}
+          </div>
+          {{ end }}
         </li>
         {{ end }}
       </ul>
@@ -48,7 +200,267 @@
       <p class="meta">No sessions found{{ if .SelectedCwdLabel }} for this directory{{ end }}.</p>
       {{ end }}
     </div>
+    {{ end }}
   </main>
+  <script>
+    (function () {
+      document.addEventListener("click", function (event) {
+        var target = event.target;
+        if (!(target instanceof HTMLElement)) return;
+
+        var stateTrigger = target.closest("[data-active-action]");
+        if (stateTrigger) {
+          event.preventDefault();
+          var action = stateTrigger.getAttribute("data-active-action");
+          var key = stateTrigger.getAttribute("data-active-key");
+          if (!action || !key) return;
+
+          fetch("/active/state", {
+            method: "POST",
+            credentials: "same-origin",
+            headers: {
+              "Content-Type": "application/x-www-form-urlencoded"
+            },
+            body: "action=" + encodeURIComponent(action) + "&key=" + encodeURIComponent(key)
+          })
+            .then(function (response) {
+              if (!response.ok) throw new Error("state update failed");
+              return response.json();
+            })
+            .then(function () {
+              window.location.reload();
+            })
+            .catch(function () {});
+          return;
+        }
+
+        var item = target.closest(".session-list-item");
+        if (!item || target.closest("a, button, summary, details, input, textarea, label, form")) return;
+        var link = item.querySelector("a.link-item-link");
+        if (!link) return;
+        window.location = link.href;
+      });
+    })();
+
+    (function () {
+      var input = document.getElementById("search-input");
+      var results = document.getElementById("search-results");
+      var status = document.getElementById("search-status");
+      if (!input || !results || !status) return;
+
+      var minChars = 2;
+      var debounceMs = 250;
+      var timer = null;
+      var controller = null;
+      var lastQuery = "";
+      var cwd = input.getAttribute("data-cwd") || "";
+      var dirFilterCards = document.querySelectorAll("[data-dir-filter]");
+      var sessionListCards = document.querySelectorAll("[data-session-list]");
+
+      function setDirFiltersHidden(hidden) {
+        if (!dirFilterCards || dirFilterCards.length === 0) return;
+        dirFilterCards.forEach(function (card) {
+          card.hidden = !!hidden;
+        });
+      }
+
+      function setSessionListsHidden(hidden) {
+        if (!sessionListCards || sessionListCards.length === 0) return;
+        sessionListCards.forEach(function (card) {
+          card.hidden = !!hidden;
+        });
+      }
+
+      function setStatus(message) {
+        status.textContent = message || "";
+      }
+
+      function clearResults(message) {
+        results.innerHTML = "";
+        setStatus(message);
+      }
+
+      function highlightText(container, text, query) {
+        if (!query) {
+          container.textContent = text;
+          return;
+        }
+        var lowerText = text.toLowerCase();
+        var lowerQuery = query.toLowerCase();
+        var start = 0;
+        var index = lowerText.indexOf(lowerQuery, start);
+        if (index === -1) {
+          container.textContent = text;
+          return;
+        }
+        while (index !== -1) {
+          if (index > start) {
+            container.appendChild(document.createTextNode(text.slice(start, index)));
+          }
+          var mark = document.createElement("mark");
+          mark.textContent = text.slice(index, index + query.length);
+          container.appendChild(mark);
+          start = index + query.length;
+          index = lowerText.indexOf(lowerQuery, start);
+        }
+        if (start < text.length) {
+          container.appendChild(document.createTextNode(text.slice(start)));
+        }
+      }
+
+      function renderResults(data, query) {
+        results.innerHTML = "";
+        if (!data || !data.results || data.results.length === 0) {
+          if (query.length >= minChars) {
+            setStatus("No results.");
+          } else {
+            setStatus("Type at least " + minChars + " characters to search.");
+          }
+          return;
+        }
+        setStatus(data.results.length + " result" + (data.results.length === 1 ? "" : "s") + ".");
+        data.results.forEach(function (item) {
+          var li = document.createElement("li");
+          li.className = "session-list-item search-result";
+
+          var link = document.createElement("a");
+          link.className = "link-item-link search-result-link";
+          var targetLine = item.line;
+          if (item.role === "assistant" && item.prevUserLine) {
+            targetLine = item.prevUserLine;
+          }
+          link.href = "/" + item.path + "/" + item.file + "#line-" + targetLine;
+          link.textContent = item.displayFile || item.file;
+
+          var meta = document.createElement("span");
+          meta.className = "meta search-result-meta";
+          var parts = [];
+          if (item.timestamp) {
+            parts.push(item.timestamp);
+          } else if (item.date) {
+            parts.push(item.date);
+          }
+          if (item.cwd) {
+            parts.push(item.cwd);
+          }
+          parts.push("Line " + item.line);
+          if (item.role) {
+            parts.push(item.role);
+          }
+          meta.textContent = parts.join(" | ");
+
+          li.appendChild(link);
+          li.appendChild(meta);
+
+          var thread = document.createElement("div");
+          thread.className = "session-snippet session-snippet-thread";
+          var hasUserSnippet = false;
+
+          function addSnippet(role, text, highlight, line) {
+            if (!text) return;
+            var snippetLink = document.createElement("a");
+            snippetLink.className = "snippet-link";
+            var resolvedLine = line && line > 0 ? line : targetLine;
+            snippetLink.href = "/" + item.path + "/" + item.file + "#line-" + resolvedLine;
+
+            var itemBox = document.createElement("div");
+            itemBox.className = "session-item role-" + role + " snippet-item";
+
+            var content = document.createElement("div");
+            content.className = "session-content";
+            if (highlight) {
+              highlightText(content, text, query);
+            } else {
+              content.textContent = text;
+            }
+
+            itemBox.appendChild(content);
+            snippetLink.appendChild(itemBox);
+            thread.appendChild(snippetLink);
+          }
+
+          if (item.role === "user") {
+            hasUserSnippet = !!item.preview;
+            addSnippet("user", item.preview, true, item.line);
+            if (item.nextAssistant) {
+              addSnippet("assistant", item.nextAssistant, false, item.nextAssistantLine);
+            }
+          } else if (item.role === "assistant") {
+            if (item.prevUser) {
+              hasUserSnippet = true;
+              addSnippet("user", item.prevUser, false, item.prevUserLine);
+            }
+            addSnippet("assistant", item.preview, true, item.line);
+          } else if (item.preview) {
+            addSnippet(item.role || "unknown", item.preview, true, item.line);
+          }
+
+          if (thread.childNodes.length > 0) {
+            if (hasUserSnippet) {
+              var divider = document.createElement("div");
+              divider.className = "snippet-divider";
+              divider.textContent = "：";
+              thread.insertBefore(divider, thread.firstChild);
+            }
+            li.appendChild(thread);
+          }
+
+          results.appendChild(li);
+        });
+      }
+
+      function fetchResults(query) {
+        if (controller) {
+          controller.abort();
+        }
+        controller = new AbortController();
+        setStatus("Searching...");
+        var url = "/search?query=" + encodeURIComponent(query) + "&limit=50";
+        if (cwd) {
+          url += "&cwd=" + encodeURIComponent(cwd);
+        }
+        fetch(url, {
+          method: "GET",
+          credentials: "same-origin",
+          signal: controller.signal
+        })
+          .then(function (response) {
+            if (!response.ok) throw new Error("search failed");
+            return response.json();
+          })
+          .then(function (data) {
+            renderResults(data, query);
+          })
+          .catch(function (error) {
+            if (error.name === "AbortError") return;
+            setStatus("Search failed.");
+          });
+      }
+
+      input.addEventListener("input", function () {
+        var query = input.value.trim();
+        if (query === lastQuery) return;
+        lastQuery = query;
+        if (timer) {
+          clearTimeout(timer);
+        }
+        var hasQuery = query.length >= minChars;
+        setDirFiltersHidden(hasQuery);
+        setSessionListsHidden(hasQuery);
+        if (!hasQuery) {
+          clearResults("Type at least " + minChars + " characters to search.");
+          return;
+        }
+        timer = setTimeout(function () {
+          fetchResults(query);
+        }, debounceMs);
+      });
+
+      setDirFiltersHidden(false);
+      setSessionListsHidden(false);
+      clearResults("Type at least " + minChars + " characters to search.");
+    })();
+  </script>
 </body>
 </html>
 {{ end }}

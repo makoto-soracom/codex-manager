@@ -4,19 +4,20 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{{ .File.Name }} - Codex Session</title>
+  <title>{{ .File.DisplayName }} - Codex Session</title>
   {{ template "style" . }}
 </head>
 <body class="{{ .ThemeClass }} has-sticky-header">
   <header class="sticky-header">
-    <p class="subtitle"><a href="/">All dates</a> / <a href="/{{ .Date.Path }}/">{{ .Date.Label }}</a></p>
-    <h1 class="page-title">{{ .File.Name }}</h1>
-    <p class="meta">{{ .File.Size }} | {{ .File.ModTime }}{{ if .File.Cwd }} | CWD: {{ .File.Cwd }}{{ if .ResumeCommand }} (<a href="#" data-copy-id="resume-cmd">Copy resume command</a>){{ end }}{{ end }}{{ if and (not .File.Cwd) .ResumeCommand }}
-      | <a href="#" data-copy-id="resume-cmd">Copy resume command</a>{{ end }} | <a href="#" data-copy-id="md-all">Copy thread as Markdown</a>
-      {{ if and .IsJSONL (gt .LastUserLine 0) }}| <a href="#line-{{ .LastUserLine }}">Jump to last user message</a> | <a id="jump-user-prev" href="#" aria-label="Previous user message" title="Previous user message">[&uarr;]</a> <a id="jump-user-next" href="#" aria-label="Next user message" title="Next user message">[&darr;]</a>{{ end }}
-      | <form class="share-form" method="post" action="/share/{{ .Date.Path }}/{{ .File.Name }}">
-        <button class="copy-btn" type="submit">Share</button>
+    <p class="subtitle"><a href="/">All dates</a> / <a href="/active">Active threads</a> / <a href="/notifications">Notifications</a> / {{ .Date.Label }}{{ if .File.ModTimeOnly }} {{ .File.ModTimeOnly }}{{ end }} ({{ .File.Size }})</p>
+    <h1 class="page-title">{{ .File.DisplayName }}{{ if .ResumeCommand }} <span class="title-links">(<a class="title-link nav-btn" href="#" data-copy-id="resume-cmd">▶️ Copy resume command</a> | <a class="title-link nav-btn" href="#" data-copy-id="md-all">📋 Copy thread as Markdown</a>)</span>{{ end }}</h1>
+      <p class="meta">{{ if .File.Cwd }}<a class="cwd-link nav-btn" href="/dir?cwd={{ .File.Cwd | urlquery }}" title="Back to this CWD">📂</a> CWD: {{ .File.Cwd }}{{ if .CwdNav }} {{ if .CwdNav.Prev }}<a class="nav-btn" href="{{ .CwdNav.Prev.Path }}" title="{{ .CwdNav.Prev.Title }}">⬅️</a>{{ else }}<span class="nav-btn disabled">⬅️</span>{{ end }}{{ if .CwdNav.Next }}<a class="nav-btn" href="{{ .CwdNav.Next.Path }}" title="{{ .CwdNav.Next.Title }}">➡️</a>{{ else }}<span class="nav-btn disabled">➡️</span>{{ end }}{{ end }}{{ end }}{{ if .File.Branch }}{{ if .File.Cwd }} | {{ end }}Branch: {{ .File.Branch }}{{ end }}
+      {{ if and .IsJSONL (gt .LastUserLine 0) }}{{ if or .File.Cwd .File.Branch }} | {{ end }}<a class="nav-btn" href="#last-user">🚀 Jump to last {{ .UserNavLabel }} message</a> | <a class="nav-btn" id="jump-user-prev" href="#" aria-label="Previous {{ .UserNavLabel }} message" title="Previous {{ .UserNavLabel }} message">⬆️</a><a class="nav-btn" id="jump-user-next" href="#" aria-label="Next {{ .UserNavLabel }} message" title="Next {{ .UserNavLabel }} message">⬇️</a>{{ end }}
+      <form class="share-form" method="post" action="/share/{{ .Date.Path }}/{{ .File.Name }}">
+        <button class="nav-btn" type="submit">Share</button>
       </form>
+      {{ if .ThreadStateKey }} <span class="tag tag-status-{{ .ThreadStatusClass }}">{{ .ThreadStatusLabel }}</span> <button class="nav-btn" type="button" data-active-action="{{ .ThreadAction }}" data-active-key="{{ .ThreadStateKey }}">{{ .ThreadActionLabel }}</button>{{ end }}
+      {{ if .ParentSessionPath }} <a class="nav-btn" href="{{ .ParentSessionPath }}" target="_blank" rel="noopener noreferrer" title="{{ .ParentSessionTitle }}">Open agent thread</a>{{ end }}
     </p>
     <div id="share-banner" class="share-banner" role="status" aria-live="polite"></div>
     {{ if .ResumeCommand }}
@@ -25,11 +26,15 @@
     <textarea id="md-all" class="copy-source">{{ .AllMarkdown }}</textarea>
   </header>
   <main>
+    <span id="page-top" class="session-anchor"></span>
     {{ if .Meta }}
     <div class="card">
-      <p class="meta"><span class="tag">Session {{ .Meta.ID }}</span></p>
-      <p class="meta">CWD: {{ .Meta.Cwd }}</p>
+      <p class="meta"><span class="tag">Session {{ .Meta.ID }}</span>{{ if .IsSubagentThread }} <span class="tag tag-subagent">Subagent thread</span>{{ if .SubagentDisplayName }} <span class="tag tag-subagent-name">{{ .SubagentDisplayName }}</span>{{ end }}{{ if .SubagentDisplayRole }} <span class="tag tag-subagent-role">{{ .SubagentDisplayRole }}</span>{{ end }}{{ end }}</p>
+      {{ if or .File.Cwd .File.Branch }}<p class="meta">{{ if .File.Cwd }}CWD: {{ .File.Cwd }}{{ end }}{{ if .File.Branch }}{{ if .File.Cwd }} | {{ end }}Branch: {{ .File.Branch }}{{ end }}</p>{{ end }}
       <p class="meta">Originator: {{ .Meta.Originator }} | CLI: {{ .Meta.CliVersion }}</p>
+      {{ if .IsSubagentThread }}
+      <p class="meta">Conversation: Subagent{{ if .SubagentDisplayName }} {{ .SubagentDisplayName }}{{ end }}{{ if .SubagentDisplayRole }} ({{ .SubagentDisplayRole }}){{ end }} on the left, Agent on the right.{{ if and (not .ParentSessionPath) .ParentThreadID }} Parent session: {{ .ParentThreadID }}{{ end }}</p>
+      {{ end }}
       <details>
         <summary class="meta">Instructions</summary>
         <pre class="session-content">{{ .Meta.Instructions }}</pre>
@@ -39,20 +44,49 @@
 
     {{ if .Items }}
       {{ range .Items }}
-      <section id="line-{{ .Line }}" class="session-item {{ .Class }}">
+      <section id="line-{{ .Line }}" class="{{ if .IsTurnAborted }}turn-aborted-item{{ else }}session-item {{ .Class }}{{ end }}">
+        {{ if eq .Line $.LastUserLine }}<span id="last-user" class="session-anchor"></span>{{ end }}
+        {{ if eq .Line $.LastAgentLine }}<span id="last-agent" class="session-anchor"></span>{{ end }}
+        {{ if and (gt $.LastUserLine 0) (eq .Line $.LastUserLine) }}<span id="last-item" class="session-anchor"></span>{{ else if and (eq $.LastUserLine 0) (eq .Line $.LastItemLine) (not .ToolRunOutputLine) }}<span id="last-item" class="session-anchor"></span>{{ end }}
+        {{ if .IsTurnAborted }}
+        <p class="turn-aborted-text">{{ .TurnAbortedMessage }}</p>
+        {{ else }}
         <div class="session-header">
           <span class="session-title">{{ .Title }}</span>
           <span class="session-type">{{ .Type }}{{ if .Subtype }}:{{ .Subtype }}{{ end }}</span>
           <span class="meta">{{ .Timestamp }}</span>
-          {{ if .Role }}<span class="tag">{{ .Role }}</span>{{ end }}
+          {{ if .RoleLabel }}<span class="tag tag-role-{{ .RoleLabel }}">{{ .RoleLabel }}</span>{{ end }}
           {{ if .AutoCtx }}<span class="tag tag-auto">Auto context</span>{{ end }}
-          <span class="meta">Line {{ .Line }}</span>
-          <button class="copy-btn" type="button" data-copy-id="md-{{ .Line }}" aria-label="Copy Markdown" title="Copy Markdown">📋</button>
-          <button class="copy-btn" type="button" data-copy-link="line-{{ .Line }}" aria-label="Copy Link" title="Copy Link">🔗</button>
+          {{ if .SpeakerName }}<span class="tag tag-subagent-name">{{ .SpeakerName }}</span>{{ end }}
+          {{ if .SpeakerRole }}<span class="tag tag-subagent-role">{{ .SpeakerRole }}</span>{{ end }}
+          {{ if .SubagentStatusType }}<span class="tag tag-subagent">{{ .SubagentStatusType }}</span>{{ end }}
+          {{ if .SubagentID }}<span class="meta subagent-id">{{ .SubagentID }}</span>{{ end }}
+          {{ if .SubagentSessionPath }}<a class="nav-btn subagent-link" href="{{ .SubagentSessionPath }}" target="_blank" rel="noopener noreferrer" title="{{ .SubagentSessionTitle }}">Open subagent thread</a>{{ end }}
+          {{ if .ToolRunOutputLine }}<span class="meta">Lines {{ .Line }} / {{ .ToolRunOutputLine }}</span>{{ else }}<span class="meta">Line {{ .Line }}</span>{{ end }}
+          <button class="copy-btn" type="button" data-copy-id="md-{{ .Line }}" aria-label="Copy Markdown" title="Copy Markdown">📋</button><button class="copy-btn" type="button" data-copy-link="line-{{ .Line }}" aria-label="Copy Link" title="Copy Link">🔗</button>
         </div>
-        {{ if eq .Subtype "reasoning" }}
+        {{ if .ToolRunOutputLine }}
+        <div class="tool-run-part tool-run-part-call">
+          <p class="meta tool-run-part-meta"><span class="tag tag-tool-run-call">Tool call</span> {{ .ToolRunCallTitle }} | {{ .Timestamp }} | Line {{ .Line }}</p>
+          <div class="session-content markdown">{{ .HTML }}</div>
+        </div>
+        <div class="tool-run-part tool-run-part-output">
+          <span id="line-{{ .ToolRunOutputLine }}" class="session-anchor"></span>
+          {{ if and (eq $.LastUserLine 0) (eq .ToolRunOutputLine $.LastItemLine) }}<span id="last-item" class="session-anchor"></span>{{ end }}
+          <p class="meta tool-run-part-meta"><span class="tag tag-tool-run-output">Tool output</span> {{ .ToolRunOutputTitle }} | {{ .ToolRunOutputTime }} | Line {{ .ToolRunOutputLine }}</p>
+          <details class="tool-output-details">
+            <summary class="meta tool-output-summary">Reveal output</summary>
+            <div class="session-content markdown">{{ .ToolRunOutputHTML }}</div>
+          </details>
+        </div>
+        {{ else if eq .Subtype "reasoning" }}
         <details>
           <summary class="meta">Reveal reasoning</summary>
+          <div class="session-content markdown">{{ .HTML }}</div>
+        </details>
+        {{ else if or (eq .Subtype "function_call_output") (eq .Subtype "custom_tool_call_output") }}
+        <details class="tool-output-details">
+          <summary class="meta tool-output-summary">Reveal output</summary>
           <div class="session-content markdown">{{ .HTML }}</div>
         </details>
         {{ else if .AutoCtx }}
@@ -61,9 +95,16 @@
           <div class="session-content markdown">{{ .HTML }}</div>
         </details>
         {{ else }}
+        {{ if .SubagentRequest }}
+        <details class="subagent-request">
+          <summary class="meta">Agent request</summary>
+          <div class="session-content markdown subagent-request-body">{{ .SubagentRequestHTML }}</div>
+        </details>
+        {{ end }}
         <div class="session-content markdown">{{ .HTML }}</div>
         {{ end }}
         <textarea id="md-{{ .Line }}" class="copy-source">{{ .Markdown }}</textarea>
+        {{ end }}
       </section>
       {{ end }}
     {{ else }}
@@ -81,6 +122,26 @@
       }
       updateStickyOffset();
       window.addEventListener("resize", updateStickyOffset);
+
+      function getStickyOffset() {
+        return stickyHeader ? stickyHeader.offsetHeight : 0;
+      }
+      function getElementTop(element) {
+        var rect = element.getBoundingClientRect();
+        var scrollY = window.scrollY || window.pageYOffset || 0;
+        return rect.top + scrollY;
+      }
+      function scrollToElement(element) {
+        if (!element) return;
+        var offset = getStickyOffset() + 8;
+        var top = getElementTop(element) - offset;
+        if (top < 0) top = 0;
+        if (typeof window.scrollTo === "function") {
+          window.scrollTo({ top: top, behavior: "smooth" });
+        } else {
+          window.scrollTop = top;
+        }
+      }
 
       function copyText(text, target) {
         if (navigator.clipboard && navigator.clipboard.writeText) {
@@ -120,6 +181,35 @@
         }
         var base = origin + window.location.pathname + window.location.search;
         copyText(base + "#" + anchorId, trigger);
+      });
+
+      document.addEventListener("click", function (event) {
+        var target = event.target;
+        if (!(target instanceof HTMLElement)) return;
+        var stateTrigger = target.closest("[data-active-action]");
+        if (!stateTrigger) return;
+        event.preventDefault();
+
+        var action = stateTrigger.getAttribute("data-active-action");
+        var key = stateTrigger.getAttribute("data-active-key");
+        if (!action || !key) return;
+
+        fetch("/active/state", {
+          method: "POST",
+          credentials: "same-origin",
+          headers: {
+            "Content-Type": "application/x-www-form-urlencoded"
+          },
+          body: "action=" + encodeURIComponent(action) + "&key=" + encodeURIComponent(key)
+        })
+          .then(function (response) {
+            if (!response.ok) throw new Error("state update failed");
+            return response.json();
+          })
+          .then(function () {
+            window.location.reload();
+          })
+          .catch(function () {});
       });
 
       var shareForm = document.querySelector(".share-form");
@@ -171,34 +261,15 @@
       var jumpNext = document.getElementById("jump-user-next");
       if (jumpPrev || jumpNext) {
         var userSections = Array.prototype.slice.call(
-          document.querySelectorAll("section.session-item.role-user:not(.auto-context)")
+          document.querySelectorAll("section.session-item.role-user:not(.auto-context):not(.subagent-notification)")
         );
-        var getStickyOffset = function () {
-          return stickyHeader ? stickyHeader.offsetHeight : 0;
-        };
-        var getSectionTop = function (section) {
-          var rect = section.getBoundingClientRect();
-          var scrollY = window.scrollY || window.pageYOffset || 0;
-          return rect.top + scrollY;
-        };
-        var scrollToSection = function (section) {
-          if (!section) return;
-          var offset = getStickyOffset() + 8;
-          var top = getSectionTop(section) - offset;
-          if (top < 0) top = 0;
-          if (typeof window.scrollTo === "function") {
-            window.scrollTo({ top: top, behavior: "smooth" });
-          } else {
-            window.scrollTop = top;
-          }
-        };
         var findCurrentIndex = function () {
           var offset = getStickyOffset() + 8;
           var scrollY = window.scrollY || window.pageYOffset || 0;
           var position = scrollY + offset + 1;
           var current = -1;
           for (var i = 0; i < userSections.length; i++) {
-            if (getSectionTop(userSections[i]) <= position) {
+            if (getElementTop(userSections[i]) <= position) {
               current = i;
             } else {
               break;
@@ -211,18 +282,34 @@
           if (!userSections.length) return;
           var index = findCurrentIndex();
           var target = index <= 0 ? 0 : index - 1;
-          scrollToSection(userSections[target]);
+          scrollToElement(userSections[target]);
         };
         var goNext = function (event) {
           if (event) event.preventDefault();
           if (!userSections.length) return;
           var index = findCurrentIndex();
           var target = index < 0 ? 0 : Math.min(index + 1, userSections.length - 1);
-          scrollToSection(userSections[target]);
+          scrollToElement(userSections[target]);
         };
         if (jumpPrev) jumpPrev.addEventListener("click", goPrev);
         if (jumpNext) jumpNext.addEventListener("click", goNext);
       }
+
+      function handleInitialJump() {
+        var hash = window.location.hash || "";
+        if (hash.length > 1) {
+          var target = document.getElementById(hash.slice(1));
+          if (target) {
+            setTimeout(function () { scrollToElement(target); }, 0);
+            return;
+          }
+        }
+        var lastItem = document.getElementById("last-item");
+        if (lastItem) {
+          setTimeout(function () { scrollToElement(lastItem); }, 0);
+        }
+      }
+      handleInitialJump();
 
     })();
   </script>

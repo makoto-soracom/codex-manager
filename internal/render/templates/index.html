@@ -9,7 +9,7 @@
 </head>
 <body class="{{ .ThemeClass }}">
   <header>
-    <p class="subtitle">Codex sessions browser</p>
+    <p class="subtitle">Codex sessions browser / <a href="/active">Active threads</a> / <a href="/notifications">Notifications</a></p>
     <h1 class="page-title">{{ if eq .View "dir" }}Available Directories{{ else }}Available Dates{{ end }}</h1>
     <div class="tabs">
       <a class="tab {{ if eq .View "date" }}active{{ end }}" href="/?view=date">By date</a>
@@ -136,12 +136,16 @@
         setStatus(data.results.length + " result" + (data.results.length === 1 ? "" : "s") + ".");
         data.results.forEach(function (item) {
           var li = document.createElement("li");
-          li.className = "search-result";
+          li.className = "session-list-item search-result";
 
           var link = document.createElement("a");
-          link.className = "search-result-link";
-          link.href = "/" + item.path + "/" + item.file + "#line-" + item.line;
-          link.textContent = item.file;
+          link.className = "link-item-link search-result-link";
+          var targetLine = item.line;
+          if (item.role === "assistant" && item.prevUserLine) {
+            targetLine = item.prevUserLine;
+          }
+          link.href = "/" + item.path + "/" + item.file + "#line-" + targetLine;
+          link.textContent = item.displayFile || item.file;
 
           var meta = document.createElement("span");
           meta.className = "meta search-result-meta";
@@ -163,11 +167,57 @@
           li.appendChild(link);
           li.appendChild(meta);
 
-          if (item.preview) {
-            var snippet = document.createElement("div");
-            snippet.className = "search-result-snippet";
-            highlightText(snippet, item.preview, query);
-            li.appendChild(snippet);
+          var thread = document.createElement("div");
+          thread.className = "session-snippet session-snippet-thread";
+          var hasUserSnippet = false;
+
+          function addSnippet(role, text, highlight, line) {
+            if (!text) return;
+            var snippetLink = document.createElement("a");
+            snippetLink.className = "snippet-link";
+            var resolvedLine = line && line > 0 ? line : targetLine;
+            snippetLink.href = "/" + item.path + "/" + item.file + "#line-" + resolvedLine;
+
+            var itemBox = document.createElement("div");
+            itemBox.className = "session-item role-" + role + " snippet-item";
+
+            var content = document.createElement("div");
+            content.className = "session-content";
+            if (highlight) {
+              highlightText(content, text, query);
+            } else {
+              content.textContent = text;
+            }
+
+            itemBox.appendChild(content);
+            snippetLink.appendChild(itemBox);
+            thread.appendChild(snippetLink);
+          }
+
+          if (item.role === "user") {
+            hasUserSnippet = !!item.preview;
+            addSnippet("user", item.preview, true, item.line);
+            if (item.nextAssistant) {
+              addSnippet("assistant", item.nextAssistant, false, item.nextAssistantLine);
+            }
+          } else if (item.role === "assistant") {
+            if (item.prevUser) {
+              hasUserSnippet = true;
+              addSnippet("user", item.prevUser, false, item.prevUserLine);
+            }
+            addSnippet("assistant", item.preview, true, item.line);
+          } else if (item.preview) {
+            addSnippet(item.role || "unknown", item.preview, true, item.line);
+          }
+
+          if (thread.childNodes.length > 0) {
+            if (hasUserSnippet) {
+              var divider = document.createElement("div");
+              divider.className = "snippet-divider";
+              divider.textContent = "：";
+              thread.insertBefore(divider, thread.firstChild);
+            }
+            li.appendChild(thread);
           }
 
           results.appendChild(li);

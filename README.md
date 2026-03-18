@@ -6,9 +6,11 @@ Browse and render Codex session `.jsonl` files with a web UI, and optionally sha
 
 ## Features
 - Indexes `~/.codex/sessions/{year}/{month}/{day}` and lists sessions by date.
+- Adds `/active` for day-by-day active threads across all directories, with manual end/reopen controls.
+- Accepts Codex CLI notification webhooks on `/hook` and lets you inspect them on `/notifications`.
 - Renders conversations as HTML with markdown support and dark theme.
-- Shows only user/agent messages and reasoning; tool calls and other events are omitted.
-- Consecutive messages are merged; for user groups, only the last message is kept.
+- Shows user/agent messages, non-empty reasoning summaries, and response items such as tool calls, tool outputs, web searches, custom tool activity, and ghost snapshots.
+- Consecutive messages and reasoning items are merged; visible tool/system items stay separate. For user groups, only the last message is kept.
 - User messages can be trimmed to content after `## My request for Codex:` (default on).
 - Share button saves a hard‑to‑guess HTML file to `~/.codex/shares` and copies its URL.
 - Separate share server serves only exact filenames (no directory listing).
@@ -56,6 +58,11 @@ go run ./cmd/codex-manager --open-browser
 Visit:
 - UI: http://localhost:8080/
 - Share server: http://localhost:8081/
+
+Key pages:
+- `/` date/directory browser
+- `/active` active thread list (default: today in your browser time zone)
+- `/notifications` received webhook notifications
 
 ## Autostart (systemd --user)
 If your environment supports user services (WSL with systemd, Linux desktops), you can keep it running.
@@ -139,6 +146,36 @@ Clicking “Share”:
 - Otherwise: renders to a UUID-like filename at `~/.codex/shares/<uuid>.html`.
 - Copies the share URL to your clipboard
 - Displays a banner showing the copied URL
+
+## Active thread state
+- New top-level threads are treated as active by default.
+- `/active` uses your browser time zone (stored in a cookie) to decide which day a thread belongs to.
+- A thread is shown as:
+  - `Waiting for user`
+  - `Waiting for agent`
+  - `Ended`
+- `Ended` is a manual flag stored in `~/.codex/session_state.json`.
+- If a thread receives new JSONL activity after being marked ended, it automatically returns to active.
+- `/active` refreshes while the page is open without changing the global `--rescan-interval`.
+
+## Codex CLI notifications
+You can point Codex CLI `notify` to the local server:
+
+```toml
+notify = [
+  "curl",
+  "-sS",
+  "-X", "POST",
+  "http://localhost:8080/hook",
+  "-H", "Content-Type: application/json",
+  "--data-binary"
+]
+```
+
+- Incoming requests are accepted on `/hook`.
+- Received notifications are appended to `~/.codex/notifications.jsonl`.
+- `/notifications` shows the newest notifications first, with headers and body.
+- The page auto-refreshes while open so you can inspect payloads as they arrive.
 
 ## Development
 ```bash

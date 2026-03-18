@@ -9,20 +9,64 @@
 </head>
 <body class="{{ .ThemeClass }}">
   <header>
-    <p class="subtitle"><a href="/?view=dir">All directories</a></p>
-    <h1 class="page-title">Dates for {{ .Dir.Label }}</h1>
+    <p class="subtitle"><a href="/?view=dir">All directories</a> / <a href="/active">Active threads</a> / <a href="/notifications">Notifications</a></p>
+    <h1 class="page-title">Sessions for {{ .Dir.Label }}</h1>
     <p class="meta">{{ .Dir.Count }} session{{ if ne .Dir.Count 1 }}s{{ end }}</p>
+    <form class="filter-form" method="get" action="/dir">
+      <input type="hidden" name="cwd" value="{{ .Dir.Value }}">
+      <input type="hidden" name="page" value="1">
+      <label class="filter-toggle">
+        <input class="filter-checkbox" type="checkbox" name="all" value="1"{{ if .ShowAll }} checked{{ end }} onchange="this.form.submit()">
+        <span class="filter-label">Show all (including threads without user messages)</span>
+      </label>
+    </form>
   </header>
   <main>
+    {{ if or .HasPrev .HasNext (gt .TotalPages 1) }}
+    <div class="pagination">
+      {{ if .HasPrev }}
+      <a class="nav-btn" href="/dir?cwd={{ $.Dir.Value | urlquery }}&page={{ .PrevPage }}{{ if $.ShowAll }}&all=1{{ end }}">⬅️ Prev</a>
+      {{ else }}
+      <span class="nav-btn disabled">⬅️ Prev</span>
+      {{ end }}
+      <span class="page-meta">Page {{ .Page }}{{ if gt .TotalPages 0 }} / {{ .TotalPages }}{{ end }}</span>
+      {{ if .HasNext }}
+      <a class="nav-btn" href="/dir?cwd={{ $.Dir.Value | urlquery }}&page={{ .NextPage }}{{ if $.ShowAll }}&all=1{{ end }}">Next ➡️</a>
+      {{ else }}
+      <span class="nav-btn disabled">Next ➡️</span>
+      {{ end }}
+    </div>
+    {{ end }}
     <div class="card">
-      {{ if .Dates }}
+      {{ if .Sessions }}
       <ul class="list link-list">
-        {{ range .Dates }}
-        <li>
-          <a class="link-item-link" href="/{{ .Path }}/?cwd={{ $.Dir.Value | urlquery }}">
-            {{ .Label }}
-            <span class="meta">{{ .Count }} session{{ if ne .Count 1 }}s{{ end }}</span>
+        {{ range .Sessions }}
+        <li class="session-list-item">
+          <a class="link-item-link" href="/{{ .DatePath }}/{{ .Name }}#last-item">
+            {{ .DisplayName }}
+            <span class="meta">{{ .ModTime }} | {{ .Size }}{{ if .Branch }} | Branch: {{ .Branch }}{{ end }}</span>
           </a>
+          {{ if or .LastUserSnippet .LastAssistantSnippet }}
+          <div class="session-snippet session-snippet-thread">
+            {{ if .LastUserSnippet }}<div class="snippet-divider">：</div>{{ end }}
+            {{ if .LastUserSnippet }}
+            <a class="snippet-link" href="/{{ .DatePath }}/{{ .Name }}#last-item">
+              <div class="session-item snippet-item snippet-item-right speaker-{{ .LastUserSnippetClass }}">
+                <div class="snippet-speaker">{{ .LastUserSnippetTitle }}</div>
+                <div class="session-content">{{ .LastUserSnippet }}</div>
+              </div>
+            </a>
+            {{ end }}
+            {{ if .LastAssistantSnippet }}
+            <a class="snippet-link" href="/{{ .DatePath }}/{{ .Name }}#last-item">
+              <div class="session-item snippet-item snippet-item-left speaker-{{ .LastAssistantSnippetClass }}">
+                <div class="snippet-speaker">{{ .LastAssistantSnippetTitle }}</div>
+                <div class="session-content">{{ .LastAssistantSnippet }}</div>
+              </div>
+            </a>
+            {{ end }}
+          </div>
+          {{ end }}
         </li>
         {{ end }}
       </ul>
@@ -31,6 +75,17 @@
       {{ end }}
     </div>
   </main>
+  <script>
+    (function () {
+      document.addEventListener("click", function (event) {
+        var item = event.target.closest(".session-list-item");
+        if (!item || event.target.closest("a")) return;
+        var link = item.querySelector("a.link-item-link");
+        if (!link) return;
+        window.location = link.href;
+      });
+    })();
+  </script>
 </body>
 </html>
 {{ end }}

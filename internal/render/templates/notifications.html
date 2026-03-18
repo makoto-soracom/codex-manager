@@ -1,0 +1,175 @@
+{{ define "notifications" }}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Notifications - Codex Sessions</title>
+  {{ template "style" . }}
+</head>
+<body class="{{ .ThemeClass }}">
+  <header>
+    <p class="subtitle"><a href="/">All dates</a> / <a href="/active">Active threads</a></p>
+    <h1 class="page-title">Notifications</h1>
+  </header>
+  <main id="notifications-root">
+    {{ template "notifications_content" . }}
+  </main>
+  <script>
+    (function () {
+      function getCookie(name) {
+        var prefix = name + "=";
+        var parts = document.cookie ? document.cookie.split(/;\s*/) : [];
+        for (var i = 0; i < parts.length; i++) {
+          if (parts[i].indexOf(prefix) === 0) {
+            return decodeURIComponent(parts[i].slice(prefix.length));
+          }
+        }
+        return "";
+      }
+
+      var tz = "";
+      try {
+        tz = Intl.DateTimeFormat().resolvedOptions().timeZone || "";
+      } catch (error) {
+        tz = "";
+      }
+      if (tz && getCookie("codex_tz") !== tz) {
+        document.cookie = "codex_tz=" + encodeURIComponent(tz) + "; path=/; max-age=31536000; samesite=lax";
+        window.location.reload();
+        return;
+      }
+
+      var root = document.getElementById("notifications-root");
+      if (!root) return;
+      var refreshing = false;
+
+      function copyText(text) {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(text).catch(function () {});
+          return;
+        }
+        var area = document.createElement("textarea");
+        area.value = text;
+        area.setAttribute("readonly", "readonly");
+        area.style.position = "absolute";
+        area.style.left = "-9999px";
+        document.body.appendChild(area);
+        area.select();
+        document.execCommand("copy");
+        document.body.removeChild(area);
+      }
+
+      function partialUrl() {
+        var next = new URL(window.location.href);
+        next.searchParams.set("partial", "1");
+        return next.toString();
+      }
+
+      function refreshNotifications() {
+        if (refreshing) return Promise.resolve();
+        refreshing = true;
+        return fetch(partialUrl(), {
+          method: "GET",
+          credentials: "same-origin"
+        })
+          .then(function (response) {
+            if (!response.ok) throw new Error("refresh failed");
+            return response.text();
+          })
+          .then(function (html) {
+            root.innerHTML = html;
+          })
+          .catch(function () {})
+          .finally(function () {
+            refreshing = false;
+          });
+      }
+
+      document.addEventListener("click", function (event) {
+        var target = event.target;
+        if (!(target instanceof HTMLElement)) return;
+
+        var refreshTrigger = target.closest("[data-notifications-refresh]");
+        if (refreshTrigger) {
+          event.preventDefault();
+          refreshNotifications();
+          return;
+        }
+
+        var copyTrigger = target.closest("[data-copy-id]");
+        if (!copyTrigger) return;
+        event.preventDefault();
+        var source = document.getElementById(copyTrigger.getAttribute("data-copy-id"));
+        if (!source) return;
+        copyText(source.value || source.textContent || "");
+      });
+
+      window.setInterval(function () {
+        if (document.visibilityState && document.visibilityState !== "visible") {
+          return;
+        }
+        refreshNotifications();
+      }, 5000);
+    })();
+  </script>
+</body>
+</html>
+{{ end }}
+
+{{ define "notifications_content" }}
+  <div class="card active-toolbar">
+    <div class="active-toolbar-row">
+      <p class="meta">Showing {{ len .Entries }} notification{{ if ne (len .Entries) 1 }}s{{ end }}</p>
+      <button class="nav-btn" type="button" data-notifications-refresh="1">Refresh</button>
+    </div>
+    <p class="meta">Last refresh: {{ .LastScan }}</p>
+  </div>
+
+  <div class="card">
+    {{ if .Entries }}
+    <ul class="list link-list active-list">
+      {{ range $index, $entry := .Entries }}
+      <li class="session-list-item active-list-item">
+        <div class="active-session-header">
+          <div class="active-session-title">
+            <div class="link-item-link">
+              {{ $entry.Method }} {{ $entry.Path }}
+              <span class="meta">{{ $entry.ReceivedAt }} | {{ $entry.ContentType }}{{ if $entry.SizeLabel }} | {{ $entry.SizeLabel }}{{ end }}</span>
+            </div>
+          </div>
+          <div class="active-session-actions">
+            {{ if $entry.RawBody }}
+            <button class="nav-btn" type="button" data-copy-id="notification-body-{{ $index }}">Copy body</button>
+            <textarea id="notification-body-{{ $index }}" class="copy-source">{{ $entry.RawBody }}</textarea>
+            {{ end }}
+            {{ if $entry.UserAgent }}<span class="tag">{{ $entry.UserAgent }}</span>{{ end }}
+          </div>
+        </div>
+        {{ if $entry.Preview }}
+        <p class="meta notification-preview">{{ $entry.Preview }}</p>
+        {{ end }}
+        {{ if $entry.Body }}
+        <details class="notification-details">
+          <summary class="meta">Body</summary>
+          <pre class="notification-body">{{ $entry.Body }}</pre>
+        </details>
+        {{ end }}
+        {{ if $entry.Headers }}
+        <details class="notification-details">
+          <summary class="meta">Headers</summary>
+          <div class="notification-headers">
+            {{ range $entry.Headers }}
+            <p class="meta"><strong>{{ .Key }}</strong>: {{ .Value }}</p>
+            {{ end }}
+          </div>
+        </details>
+        {{ end }}
+      </li>
+      {{ end }}
+    </ul>
+    {{ else }}
+    <p class="meta">{{ .EmptyMessage }}</p>
+    {{ end }}
+  </div>
+{{ end }}

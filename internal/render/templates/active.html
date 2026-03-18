@@ -1,0 +1,228 @@
+{{ define "active" }}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ .Heading }} - Codex Sessions</title>
+  {{ template "style" . }}
+</head>
+<body class="{{ .ThemeClass }}">
+  <header>
+    <p class="subtitle"><a href="/">All dates</a> / <a href="/?view=dir">All directories</a> / <a href="/notifications">Notifications</a></p>
+    <h1 class="page-title">{{ .Heading }}</h1>
+    {{ if .SelectedCwd }}
+    <p class="meta">Directory filter active: {{ .SelectedCwdLabel }}. <a href="/active">Clear directory filter</a></p>
+    {{ end }}
+    <div class="tabs">
+      {{ range .Tabs }}
+      <a class="tab {{ if .Active }}active{{ end }}" href="{{ .Path }}">{{ .Label }}</a>
+      {{ end }}
+    </div>
+  </header>
+  <main id="active-root">
+    {{ template "active_content" . }}
+  </main>
+  <script>
+    (function () {
+      function getCookie(name) {
+        var prefix = name + "=";
+        var parts = document.cookie ? document.cookie.split(/;\s*/) : [];
+        for (var i = 0; i < parts.length; i++) {
+          if (parts[i].indexOf(prefix) === 0) {
+            return decodeURIComponent(parts[i].slice(prefix.length));
+          }
+        }
+        return "";
+      }
+
+      var tz = "";
+      try {
+        tz = Intl.DateTimeFormat().resolvedOptions().timeZone || "";
+      } catch (error) {
+        tz = "";
+      }
+      if (tz && getCookie("codex_tz") !== tz) {
+        document.cookie = "codex_tz=" + encodeURIComponent(tz) + "; path=/; max-age=31536000; samesite=lax";
+        window.location.reload();
+        return;
+      }
+
+      var root = document.getElementById("active-root");
+      if (!root) return;
+      var refreshing = false;
+
+      function copyText(text) {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(text).catch(function () {});
+          return;
+        }
+        var area = document.createElement("textarea");
+        area.value = text;
+        area.setAttribute("readonly", "readonly");
+        area.style.position = "absolute";
+        area.style.left = "-9999px";
+        document.body.appendChild(area);
+        area.select();
+        document.execCommand("copy");
+        document.body.removeChild(area);
+      }
+
+      function partialUrl() {
+        var next = new URL(window.location.href);
+        next.searchParams.set("partial", "1");
+        return next.toString();
+      }
+
+      function refreshActive() {
+        if (refreshing) return Promise.resolve();
+        refreshing = true;
+        return fetch(partialUrl(), {
+          method: "GET",
+          credentials: "same-origin"
+        })
+          .then(function (response) {
+            if (!response.ok) throw new Error("refresh failed");
+            return response.text();
+          })
+          .then(function (html) {
+            root.innerHTML = html;
+          })
+          .catch(function () {})
+          .finally(function () {
+            refreshing = false;
+          });
+      }
+
+      document.addEventListener("click", function (event) {
+        var target = event.target;
+        if (!(target instanceof HTMLElement)) return;
+
+        var copyTrigger = target.closest("[data-copy-id]");
+        if (copyTrigger) {
+          event.preventDefault();
+          var source = document.getElementById(copyTrigger.getAttribute("data-copy-id"));
+          if (!source) return;
+          copyText(source.value || source.textContent || "");
+          return;
+        }
+
+        var refreshTrigger = target.closest("[data-active-refresh]");
+        if (refreshTrigger) {
+          event.preventDefault();
+          refreshActive();
+          return;
+        }
+
+        var stateTrigger = target.closest("[data-active-action]");
+        if (stateTrigger) {
+          event.preventDefault();
+
+          var action = stateTrigger.getAttribute("data-active-action");
+          var key = stateTrigger.getAttribute("data-active-key");
+          if (!action || !key) return;
+
+          fetch("/active/state", {
+            method: "POST",
+            credentials: "same-origin",
+            headers: {
+              "Content-Type": "application/x-www-form-urlencoded"
+            },
+            body: "action=" + encodeURIComponent(action) + "&key=" + encodeURIComponent(key)
+          })
+            .then(function (response) {
+              if (!response.ok) throw new Error("state update failed");
+              return response.json();
+            })
+            .then(function () {
+              return refreshActive();
+            })
+            .catch(function () {});
+          return;
+        }
+
+        var row = target.closest(".session-list-item");
+        if (!row || target.closest("a, button, summary, details, input, textarea, label")) {
+          return;
+        }
+        var link = row.querySelector("a.link-item-link");
+        if (!link) return;
+        window.location = link.href;
+      });
+
+      window.setInterval(function () {
+        if (document.visibilityState && document.visibilityState !== "visible") {
+          return;
+        }
+        refreshActive();
+      }, 15000);
+    })();
+  </script>
+</body>
+</html>
+{{ end }}
+
+{{ define "active_content" }}
+  <div class="card active-toolbar">
+    <div class="active-toolbar-row">
+      <p class="meta">Showing {{ .ThreadCount }} thread{{ if ne .ThreadCount 1 }}s{{ end }}{{ if .TimeZone }} | Time zone: {{ .TimeZone }}{{ end }}</p>
+      <button class="nav-btn" type="button" data-active-refresh="1">Refresh</button>
+    </div>
+    {{ if .ShowDayNav }}
+    <div class="active-day-nav">
+      <a class="nav-btn" href="{{ .PrevDayPath }}">⬅️ Previous day</a>
+      <span class="page-meta">{{ .SelectedDate }}</span>
+      <a class="nav-btn" href="{{ .NextDayPath }}">Next day ➡️</a>
+    </div>
+    {{ end }}
+    <p class="meta">Last scan: {{ .LastScan }}</p>
+  </div>
+
+  <div class="card">
+    {{ if .Threads }}
+    <ul class="list link-list active-list">
+      {{ range $index, $thread := .Threads }}
+      <li class="session-list-item active-list-item{{ if $thread.StatusClass }} thread-status-{{ $thread.StatusClass }}{{ end }}">
+        <div class="active-session-header">
+          <div class="active-session-title">
+            <a class="link-item-link" href="{{ $thread.DetailPath }}">{{ $thread.DisplayName }}</a>
+            <span class="meta">{{ $thread.LastActivity }} | {{ $thread.DateLabel }}{{ if $thread.Cwd }} | {{ $thread.Cwd }}{{ end }}{{ if $thread.Branch }} | Branch: {{ $thread.Branch }}{{ end }}</span>
+          </div>
+          <div class="active-session-actions">
+            <span class="tag tag-status-{{ $thread.StatusClass }}">{{ $thread.StatusLabel }}</span>
+            {{ if $thread.HasResumeCommand }}
+            <button class="nav-btn" type="button" data-copy-id="active-resume-{{ $index }}">▶️ Copy resume</button>
+            <textarea id="active-resume-{{ $index }}" class="copy-source">{{ $thread.ResumeCommand }}</textarea>
+            {{ end }}
+            <button class="nav-btn" type="button" data-active-action="{{ $thread.Action }}" data-active-key="{{ $thread.Key }}">{{ $thread.ActionLabel }}</button>
+          </div>
+        </div>
+        {{ if or $thread.LastUserSnippet $thread.LastAssistantSnippet }}
+        <div class="session-snippet session-snippet-thread">
+          {{ if $thread.LastUserSnippet }}<div class="snippet-divider">：</div>{{ end }}
+          {{ if $thread.LastUserSnippet }}
+          <a class="snippet-link" href="{{ $thread.DetailPath }}">
+            <div class="session-item snippet-item snippet-item-right speaker-{{ $thread.LastUserSnippetClass }}">
+              <div class="snippet-speaker">{{ $thread.LastUserSnippetTitle }}</div>
+              <div class="session-content">{{ $thread.LastUserSnippet }}</div>
+            </div>
+          </a>
+          {{ end }}
+          {{ if $thread.LastAssistantSnippet }}
+          <a class="snippet-link" href="{{ $thread.DetailPath }}">
+            <div class="session-item snippet-item snippet-item-left speaker-{{ $thread.LastAssistantSnippetClass }}">
+              <div class="snippet-speaker">{{ $thread.LastAssistantSnippetTitle }}</div>
+              <div class="session-content">{{ $thread.LastAssistantSnippet }}</div>
+            </div>
+          </a>
+          {{ end }}
+        </div>
+        {{ end }}
+      </li>
+      {{ end }}
+    </ul>
+    {{ else }}
+    <p class="meta">{{ .EmptyMessage }}</p>
+    {{ end }}
+  </div>
+{{ end }}

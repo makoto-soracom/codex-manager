@@ -1,6 +1,8 @@
 package sessions
 
 import (
+	"bufio"
+	"encoding/json"
 	"errors"
 	"io/fs"
 	"os"
@@ -30,31 +32,36 @@ func (d DateKey) Path() string {
 
 // SessionFile represents a jsonl file on disk.
 type SessionFile struct {
-	Date    DateKey
-	Name    string
-	Path    string
-	Size    int64
-	ModTime time.Time
-	Meta    *SessionMeta
+	Date       DateKey
+	Name       string
+	Path       string
+	Size       int64
+	ModTime    time.Time
+	Meta       *SessionMeta
+	ThreadName string
 }
 
 // Index stores a snapshot of sessions on disk.
 type Index struct {
-	baseDir string
-	mu      sync.RWMutex
-	byDate  map[DateKey][]SessionFile
-	byName  map[string]SessionFile
-	byCwd   map[string][]SessionFile
-	updated time.Time
+	baseDir     string
+	mu          sync.RWMutex
+	byDate      map[DateKey][]SessionFile
+	byName      map[string]SessionFile
+	byID        map[string]SessionFile
+	byCwd       map[string][]SessionFile
+	threadNames map[string]string
+	updated     time.Time
 }
 
 // NewIndex creates an empty index.
 func NewIndex(baseDir string) *Index {
 	return &Index{
-		baseDir: baseDir,
-		byDate:  map[DateKey][]SessionFile{},
-		byName:  map[string]SessionFile{},
-		byCwd:   map[string][]SessionFile{},
+		baseDir:     baseDir,
+		byDate:      map[DateKey][]SessionFile{},
+		byName:      map[string]SessionFile{},
+		byID:        map[string]SessionFile{},
+		byCwd:       map[string][]SessionFile{},
+		threadNames: map[string]string{},
 	}
 }
 
@@ -81,7 +88,9 @@ func (idx *Index) Refresh() error {
 
 	byDate := map[DateKey][]SessionFile{}
 	byName := map[string]SessionFile{}
+	byID := map[string]SessionFile{}
 	byCwd := map[string][]SessionFile{}
+	threadNames := loadThreadNames(sessionIndexPath(idx.baseDir))
 
 	walkErr := filepath.WalkDir(idx.baseDir, func(fullPath string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -125,9 +134,15 @@ func (idx *Index) Refresh() error {
 			ModTime: info.ModTime(),
 			Meta:    meta,
 		}
+		if meta != nil && meta.ID != "" {
+			file.ThreadName = threadNames[meta.ID]
+		}
 
 		byDate[date] = append(byDate[date], file)
 		byName[path.Join(date.Path(), file.Name)] = file
+		if file.Meta != nil && file.Meta.ID != "" {
+			byID[file.Meta.ID] = file
+		}
 		cwd := CwdForFile(file)
 		byCwd[cwd] = append(byCwd[cwd], file)
 		return nil
@@ -150,7 +165,9 @@ func (idx *Index) Refresh() error {
 	idx.mu.Lock()
 	idx.byDate = byDate
 	idx.byName = byName
+	idx.byID = byID
 	idx.byCwd = byCwd
+	idx.threadNames = threadNames
 	idx.updated = time.Now()
 	idx.mu.Unlock()
 	return nil
@@ -232,6 +249,21 @@ func (idx *Index) Lookup(date DateKey, filename string) (SessionFile, bool) {
 	return file, ok
 }
 
+// LookupByID returns the file for a session ID.
+func (idx *Index) LookupByID(id string) (SessionFile, bool) {
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+	file, ok := idx.byID[id]
+	return file, ok
+}
+
+// ThreadName returns the latest known thread name for a session ID.
+func (idx *Index) ThreadName(id string) string {
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+	return idx.threadNames[id]
+}
+
 func ParseDate(year, month, day string) (DateKey, bool) {
 	if len(year) != 4 || len(month) != 2 || len(day) != 2 {
 		return DateKey{}, false
@@ -268,4 +300,103 @@ func dateGreater(a, b DateKey) bool {
 		return ad > bd
 	}
 	return a.String() > b.String()
+}
+
+type sessionIndexEntry struct {
+	ID         string `json:"id"`
+	ThreadName string `json:"thread_name"`
+	UpdatedAt  string `json:"updated_at"`
+}
+
+type sessionThreadName struct {
+	threadName string
+	updatedAt  time.Time
+	hasUpdated bool
+	line       int
+}
+
+func sessionIndexPath(baseDir string) string {
+	cleanBaseDir := filepath.Clean(baseDir)
+	return filepath.Join(filepath.Dir(cleanBaseDir), "session_index.jsonl")
+}
+
+func loadThreadNames(indexPath string) map[string]string {
+	file, err := os.Open(indexPath)
+	if err != nil {
+		return map[string]string{}
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+
+	entries := map[string]sessionThreadName{}
+	lineNum := 0
+	for scanner.Scan() {
+		lineNum++
+		lineText := strings.TrimSpace(scanner.Text())
+		if lineText == "" {
+			continue
+		}
+
+		var entry sessionIndexEntry
+		if err := json.Unmarshal([]byte(lineText), &entry); err != nil {
+			continue
+		}
+
+		id := strings.TrimSpace(entry.ID)
+		threadName := strings.TrimSpace(entry.ThreadName)
+		if id == "" || threadName == "" {
+			continue
+		}
+
+		updatedAt, hasUpdated := parseSessionIndexUpdatedAt(entry.UpdatedAt)
+		current, ok := entries[id]
+		if ok && !shouldReplaceThreadName(current, updatedAt, hasUpdated, lineNum) {
+			continue
+		}
+		entries[id] = sessionThreadName{
+			threadName: threadName,
+			updatedAt:  updatedAt,
+			hasUpdated: hasUpdated,
+			line:       lineNum,
+		}
+	}
+
+	out := make(map[string]string, len(entries))
+	for id, entry := range entries {
+		out[id] = entry.threadName
+	}
+	return out
+}
+
+func parseSessionIndexUpdatedAt(value string) (time.Time, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return time.Time{}, false
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return parsed, true
+}
+
+func shouldReplaceThreadName(current sessionThreadName, updatedAt time.Time, hasUpdated bool, lineNum int) bool {
+	if hasUpdated {
+		if !current.hasUpdated {
+			return true
+		}
+		if updatedAt.After(current.updatedAt) {
+			return true
+		}
+		if updatedAt.Equal(current.updatedAt) {
+			return lineNum > current.line
+		}
+		return false
+	}
+	if current.hasUpdated {
+		return false
+	}
+	return lineNum > current.line
 }

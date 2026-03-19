@@ -182,6 +182,11 @@
     {{ if .Threads }}
     <ul class="list link-list active-list">
       {{ range $index, $thread := .Threads }}
+      {{ if $thread.ShowDateDivider }}
+      <li class="active-date-divider" aria-label="Date group {{ $thread.DateLabel }}">
+        <span class="active-date-divider-label">{{ $thread.DateLabel }}</span>
+      </li>
+      {{ end }}
       <li class="session-list-item active-list-item{{ if $thread.StatusClass }} thread-status-{{ $thread.StatusClass }}{{ end }}">
         <div class="active-session-header">
           <div class="active-session-title">

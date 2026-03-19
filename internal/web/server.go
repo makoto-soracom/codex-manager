@@ -282,6 +282,7 @@ type activeSessionView struct {
 	DisplayName               string
 	DetailPath                string
 	DateLabel                 string
+	ShowDateDivider           bool
 	Cwd                       string
 	Branch                    string
 	LastActivity              string
@@ -1093,6 +1094,15 @@ func (s *Server) buildActivePageView(r *http.Request) activePageView {
 			continue
 		}
 		threads = append(threads, buildActiveSessionRow(summary, ended, loc))
+	}
+	if scope != "day" {
+		lastDateLabel := ""
+		for i := range threads {
+			if threads[i].DateLabel != lastDateLabel {
+				threads[i].ShowDateDivider = true
+				lastDateLabel = threads[i].DateLabel
+			}
+		}
 	}
 
 	heading, emptyMessage := activeHeading(scope, selectedDateLabel, todayLabel)

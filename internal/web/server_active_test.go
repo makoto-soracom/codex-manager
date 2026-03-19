@@ -143,6 +143,60 @@ func TestHandleActiveShowsBranchAndBranchAwareResumeCommand(t *testing.T) {
 	}
 }
 
+func TestHandleActiveShowsDateDividersForAllActiveThreads(t *testing.T) {
+	root := t.TempDir()
+	sessionsDir := filepath.Join(root, "sessions")
+	date19Dir := filepath.Join(sessionsDir, "2026", "03", "19")
+	date18Dir := filepath.Join(sessionsDir, "2026", "03", "18")
+	if err := os.MkdirAll(date19Dir, 0o755); err != nil {
+		t.Fatalf("mkdir 19: %v", err)
+	}
+	if err := os.MkdirAll(date18Dir, 0o755); err != nil {
+		t.Fatalf("mkdir 18: %v", err)
+	}
+
+	newerPath := filepath.Join(date19Dir, "newer.jsonl")
+	newerData := "" +
+		"{\"timestamp\":\"2026-03-19T02:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"session-newer\",\"timestamp\":\"2026-03-19T02:00:00Z\",\"cwd\":\"/tmp/app\",\"originator\":\"cli\",\"cli_version\":\"0.1\"}}\n" +
+		"{\"timestamp\":\"2026-03-19T02:00:10Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"## My request for Codex:\\nNewer thread\"}]}}\n" +
+		"{\"timestamp\":\"2026-03-19T02:00:20Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"task_complete\"}}\n"
+	if err := os.WriteFile(newerPath, []byte(newerData), 0o600); err != nil {
+		t.Fatalf("write newer: %v", err)
+	}
+
+	olderPath := filepath.Join(date18Dir, "older.jsonl")
+	olderData := "" +
+		"{\"timestamp\":\"2026-03-18T03:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"session-older\",\"timestamp\":\"2026-03-18T03:00:00Z\",\"cwd\":\"/tmp/app\",\"originator\":\"cli\",\"cli_version\":\"0.1\"}}\n" +
+		"{\"timestamp\":\"2026-03-18T03:00:10Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"## My request for Codex:\\nOlder thread\"}]}}\n" +
+		"{\"timestamp\":\"2026-03-18T03:00:20Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"task_complete\"}}\n"
+	if err := os.WriteFile(olderPath, []byte(olderData), 0o600); err != nil {
+		t.Fatalf("write older: %v", err)
+	}
+
+	server := newActiveTestServer(t, sessionsDir)
+
+	req := httptest.NewRequest(http.MethodGet, "http://example.com/active?scope=all", nil)
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: got %d body %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if count := strings.Count(body, `class="active-date-divider-label">2026-03-19`); count != 1 {
+		t.Fatalf("expected one 2026-03-19 divider, got %d body=%s", count, body)
+	}
+	if count := strings.Count(body, `class="active-date-divider-label">2026-03-18`); count != 1 {
+		t.Fatalf("expected one 2026-03-18 divider, got %d body=%s", count, body)
+	}
+	if strings.Index(body, `class="active-date-divider-label">2026-03-19`) > strings.Index(body, "newer.jsonl") {
+		t.Fatalf("expected 2026-03-19 divider before newer thread, body=%s", body)
+	}
+	if strings.Index(body, `class="active-date-divider-label">2026-03-18`) > strings.Index(body, "older.jsonl") {
+		t.Fatalf("expected 2026-03-18 divider before older thread, body=%s", body)
+	}
+}
+
 func TestHandleActiveFiltersByCwdAndPreservesDirectoryTabs(t *testing.T) {
 	root := t.TempDir()
 	sessionsDir := filepath.Join(root, "sessions")

@@ -428,6 +428,27 @@ main {
 .active-list li {
   border-bottom: none;
 }
+.active-date-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 2px 4px;
+  color: var(--muted);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.active-date-divider::before,
+.active-date-divider::after {
+  content: "";
+  flex: 1 1 0;
+  min-width: 24px;
+  border-top: 1px solid var(--border-strong);
+  opacity: 0.85;
+}
+.active-date-divider-label {
+  white-space: nowrap;
+}
 .active-list-item {
   border: 1px solid var(--border-strong);
   background: rgba(255, 255, 255, 0.02);

@@ -19,6 +19,7 @@ import (
 	"codex-manager/internal/htmlbucket"
 	"codex-manager/internal/notifications"
 	"codex-manager/internal/render"
+	"codex-manager/internal/repooverride"
 	"codex-manager/internal/search"
 	"codex-manager/internal/sessions"
 	"codex-manager/internal/web"
@@ -64,6 +65,12 @@ func main() {
 		notificationStore, _ = notifications.LoadStore("")
 	}
 
+	repositoryOverrideStore, err := repooverride.LoadStore(repooverride.DefaultPath(cfg.SessionsDir))
+	if err != nil {
+		log.Printf("repository override load failed: %v", err)
+		repositoryOverrideStore, _ = repooverride.LoadStore("")
+	}
+
 	searchIdx := search.NewIndex()
 	if err := searchIdx.RefreshFrom(idx); err != nil {
 		log.Printf("initial search index build failed: %v", err)
@@ -97,6 +104,7 @@ func main() {
 	server := web.NewServer(idx, searchIdx, renderer, cfg.SessionsDir, cfg.ShareDir, cfg.ShareAddr, cfg.Theme)
 	server.EnableActive(activeIdx, activeState, 15*time.Second)
 	server.EnableNotifications(notificationStore)
+	server.EnableRepoOverrides(repositoryOverrideStore)
 	if htmlBucketClient != nil {
 		server.EnableHTMLBucket(htmlBucketClient)
 		log.Printf("Using htmlbucket share backend (%s)", htmlBucketAuthPath)

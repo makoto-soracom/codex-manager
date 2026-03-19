@@ -11,7 +11,7 @@ func TestParseSession(t *testing.T) {
 	base := t.TempDir()
 	filePath := filepath.Join(base, "session.jsonl")
 	data := "" +
-		"{\"timestamp\":\"2026-01-09T01:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"abc\",\"timestamp\":\"2026-01-09T01:00:00Z\",\"cwd\":\"/tmp\",\"git\":{\"branch\":\"feature/test-branch\",\"commit_hash\":\"abc123\"},\"originator\":\"cli\",\"cli_version\":\"0.1\",\"instructions\":\"hello\"}}\n" +
+		"{\"timestamp\":\"2026-01-09T01:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"abc\",\"timestamp\":\"2026-01-09T01:00:00Z\",\"cwd\":\"/tmp\",\"git\":{\"branch\":\"feature/test-branch\",\"commit_hash\":\"abc123\",\"repository_url\":\"https://github.com/cinkster/codex-manager.git\"},\"originator\":\"cli\",\"cli_version\":\"0.1\",\"instructions\":\"hello\"}}\n" +
 		"{\"timestamp\":\"2026-01-09T01:00:01Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"Context that should be dropped\"}]}}\n" +
 		"{\"timestamp\":\"2026-01-09T01:00:01Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"Hello\\n\\n## My request for Codex:\\nOnly this\"}]}}\n" +
 		"{\"timestamp\":\"2026-01-09T01:00:02Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"function_call\",\"name\":\"shell_command\",\"arguments\":\"{}\",\"call_id\":\"call_1\"}}\n" +
@@ -35,6 +35,9 @@ func TestParseSession(t *testing.T) {
 	}
 	if session.Meta.GitBranch() != "feature/test-branch" {
 		t.Fatalf("expected git branch, got %q", session.Meta.GitBranch())
+	}
+	if session.Meta.GitRepositoryURL() != "https://github.com/cinkster/codex-manager.git" {
+		t.Fatalf("expected git repository url, got %q", session.Meta.GitRepositoryURL())
 	}
 	if len(session.Items) != 5 {
 		t.Fatalf("expected 5 items, got %d", len(session.Items))

@@ -114,6 +114,27 @@ systemctl --user restart codex-manager
 - `-full` disable trimming to `## My request for Codex:`
 - `-h` / `--help`
 
+## Repository overrides
+- Default path: `~/.codex/session_repository_overrides.json`
+- Purpose: override the GitHub repository used for branch links for specific `cwd` prefixes
+- Create this file only when you need overrides; if the file is missing, Codex Manager falls back to `session_meta.git.repository_url`
+- Matching: longest `cwd_prefix` match wins
+- Changes are loaded at startup, so restart Codex Manager after editing the file
+- Format:
+  ```json
+  {
+    "version": 1,
+    "rules": [
+      {
+        "cwd_prefix": "/home/makoto/codex-manager",
+        "repository_url": "https://github.com/makoto-soracom/codex-manager.git"
+      }
+    ]
+  }
+  ```
+- Resolution order: repository override, then `session_meta.git.repository_url`
+- Scope: this only changes the repository used for branch links; branch names and resume commands still come from session metadata
+
 ## HTMLBucket notes
 - Auth file path: `~/.hb/auth.json`
 - Auth file format:

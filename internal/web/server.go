@@ -27,6 +27,7 @@ import (
 	"codex-manager/internal/active"
 	"codex-manager/internal/notifications"
 	"codex-manager/internal/render"
+	"codex-manager/internal/repooverride"
 	"codex-manager/internal/search"
 	"codex-manager/internal/sessions"
 
@@ -48,6 +49,7 @@ type Server struct {
 	active              *active.Index
 	activeState         *active.StateStore
 	notifications       *notifications.Store
+	repoOverrides       *repooverride.Store
 	renderer            *render.Renderer
 	sessionsDir         string
 	shareDir            string
@@ -97,6 +99,11 @@ func (s *Server) EnableActive(activeIdx *active.Index, state *active.StateStore,
 // EnableNotifications configures the webhook notification log.
 func (s *Server) EnableNotifications(store *notifications.Store) {
 	s.notifications = store
+}
+
+// EnableRepoOverrides configures repository URL overrides keyed by cwd prefix.
+func (s *Server) EnableRepoOverrides(store *repooverride.Store) {
+	s.repoOverrides = store
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -174,6 +181,7 @@ type sessionView struct {
 	ResumeCommand             string
 	Cwd                       string
 	Branch                    string
+	BranchURL                 string
 	DateLabel                 string
 	DatePath                  string
 	ThreadStateKey            string
@@ -1365,6 +1373,7 @@ func (s *Server) buildSessionListView(file sessions.SessionFile) sessionView {
 		ResumeCommand: resumeCommand,
 		Cwd:           cwd,
 		Branch:        branchForMeta(file.Meta),
+		BranchURL:     s.branchURLForMeta(file.Meta, cwd),
 		DateLabel:     file.Date.String(),
 		DatePath:      file.Date.Path(),
 	}
@@ -1741,6 +1750,68 @@ func branchForMeta(meta *sessions.SessionMeta) string {
 	return meta.GitBranch()
 }
 
+func (s *Server) branchURLForMeta(meta *sessions.SessionMeta, cwd string) string {
+	repoURL := normalizeRepositoryURL(s.repositoryURLForMeta(meta, cwd))
+	if repoURL == "" {
+		return ""
+	}
+	branch := branchForMeta(meta)
+	if branch == "" {
+		return repoURL
+	}
+	parsed, err := url.Parse(repoURL)
+	if err != nil {
+		return repoURL
+	}
+	host := strings.ToLower(parsed.Hostname())
+	if host != "github.com" && host != "www.github.com" {
+		return repoURL
+	}
+	parsed.Path = strings.TrimSuffix(parsed.Path, "/") + "/tree/" + escapeGitHubPath(branch)
+	parsed.RawPath = ""
+	return parsed.String()
+}
+
+func (s *Server) repositoryURLForMeta(meta *sessions.SessionMeta, cwd string) string {
+	if s != nil && s.repoOverrides != nil {
+		if overrideURL := s.repoOverrides.ResolveRepositoryURL(cwd); overrideURL != "" {
+			return overrideURL
+		}
+	}
+	if meta == nil {
+		return ""
+	}
+	return meta.GitRepositoryURL()
+}
+
+func normalizeRepositoryURL(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	switch {
+	case strings.HasPrefix(value, "git@github.com:"):
+		value = "https://github.com/" + strings.TrimPrefix(value, "git@github.com:")
+	case strings.HasPrefix(value, "ssh://git@github.com/"):
+		value = "https://github.com/" + strings.TrimPrefix(value, "ssh://git@github.com/")
+	}
+	value = strings.TrimSuffix(strings.TrimSuffix(value, "/"), ".git")
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return ""
+	}
+	parsed.Path = strings.TrimSuffix(parsed.Path, "/")
+	return parsed.String()
+}
+
+func escapeGitHubPath(value string) string {
+	parts := strings.Split(value, "/")
+	for i := range parts {
+		parts[i] = url.PathEscape(parts[i])
+	}
+	return strings.Join(parts, "/")
+}
+
 func semanticRoleLabel(role string) string {
 	switch strings.ToLower(strings.TrimSpace(role)) {
 	case "assistant":
@@ -1906,6 +1977,7 @@ func (s *Server) buildSessionView(parts []string) (sessionPageView, error) {
 			ModTimeOnly: formatTimeOnly(file.ModTime),
 			Cwd:         displayCwd(sessions.CwdForFile(file)),
 			Branch:      branchForMeta(file.Meta),
+			BranchURL:   s.branchURLForMeta(file.Meta, sessions.CwdForFile(file)),
 			DateLabel:   date.String(),
 			DatePath:    date.Path(),
 		},

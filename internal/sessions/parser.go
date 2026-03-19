@@ -203,6 +203,13 @@ func (m *SessionMeta) GitBranch() string {
 	return strings.TrimSpace(m.Git.Branch)
 }
 
+func (m *SessionMeta) GitRepositoryURL() string {
+	if m == nil || m.Git == nil {
+		return ""
+	}
+	return strings.TrimSpace(m.Git.RepositoryURL)
+}
+
 // ParseSession reads a jsonl file and returns a parsed Session.
 func ParseSession(path string) (*Session, error) {
 	file, err := os.Open(path)

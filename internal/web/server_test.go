@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"codex-manager/internal/render"
+	"codex-manager/internal/repooverride"
 	"codex-manager/internal/sessions"
 )
 
@@ -360,7 +361,7 @@ func TestBuildSessionViewShowsBranchAndBranchAwareResumeCommand(t *testing.T) {
 
 	sessionPath := filepath.Join(datePath, "branch.jsonl")
 	sessionData := "" +
-		"{\"timestamp\":\"2026-03-19T00:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"session-branch\",\"timestamp\":\"2026-03-19T00:00:00Z\",\"cwd\":\"/tmp/project\",\"git\":{\"branch\":\"feature/session-branch\",\"commit_hash\":\"abc123\"},\"originator\":\"cli\",\"cli_version\":\"0.1\"}}\n" +
+		"{\"timestamp\":\"2026-03-19T00:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"session-branch\",\"timestamp\":\"2026-03-19T00:00:00Z\",\"cwd\":\"/tmp/project\",\"git\":{\"branch\":\"feature/session-branch\",\"commit_hash\":\"abc123\",\"repository_url\":\"https://github.com/cinkster/codex-manager.git\"},\"originator\":\"cli\",\"cli_version\":\"0.1\"}}\n" +
 		"{\"timestamp\":\"2026-03-19T00:00:01Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"## My request for Codex:\\nShow branch\"}]}}\n"
 	if err := os.WriteFile(sessionPath, []byte(sessionData), 0o600); err != nil {
 		t.Fatalf("write session: %v", err)
@@ -385,6 +386,9 @@ func TestBuildSessionViewShowsBranchAndBranchAwareResumeCommand(t *testing.T) {
 	if view.File.Branch != "feature/session-branch" {
 		t.Fatalf("expected branch on session view, got %q", view.File.Branch)
 	}
+	if view.File.BranchURL != "https://github.com/cinkster/codex-manager/tree/feature/session-branch" {
+		t.Fatalf("expected branch url on session view, got %q", view.File.BranchURL)
+	}
 	if view.ResumeCommand != "cd '/tmp/project'\ngit switch 'feature/session-branch'\ncodex resume session-branch" {
 		t.Fatalf("unexpected resume command: %q", view.ResumeCommand)
 	}
@@ -397,8 +401,69 @@ func TestBuildSessionViewShowsBranchAndBranchAwareResumeCommand(t *testing.T) {
 	if !strings.Contains(html, "Branch: feature/session-branch") {
 		t.Fatalf("expected branch label in rendered html, got %s", html)
 	}
+	if !strings.Contains(html, `href="https://github.com/cinkster/codex-manager/tree/feature/session-branch"`) {
+		t.Fatalf("expected github branch link in rendered html, got %s", html)
+	}
+	if !strings.Contains(html, `target="_blank"`) {
+		t.Fatalf("expected branch link to open in new window, got %s", html)
+	}
+	if !strings.Contains(html, `class="session-page-branch-icon-svg"`) {
+		t.Fatalf("expected branch icon svg in rendered html, got %s", html)
+	}
 	if !strings.Contains(html, "git switch &#39;feature/session-branch&#39;") {
 		t.Fatalf("expected branch-aware resume command in rendered html, got %s", html)
+	}
+}
+
+func TestBuildSessionViewUsesRepositoryOverrideForBranchURL(t *testing.T) {
+	sessionsDir := t.TempDir()
+	datePath := filepath.Join(sessionsDir, "2026", "03", "19")
+	if err := os.MkdirAll(datePath, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	sessionPath := filepath.Join(datePath, "branch-override.jsonl")
+	sessionData := "" +
+		"{\"timestamp\":\"2026-03-19T00:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"session-branch-override\",\"timestamp\":\"2026-03-19T00:00:00Z\",\"cwd\":\"/home/makoto/codex-manager/internal/web\",\"git\":{\"branch\":\"feature/session-branch\",\"commit_hash\":\"abc123\",\"repository_url\":\"https://github.com/cinkster/codex-manager.git\"},\"originator\":\"cli\",\"cli_version\":\"0.1\"}}\n" +
+		"{\"timestamp\":\"2026-03-19T00:00:01Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"## My request for Codex:\\nShow branch\"}]}}\n"
+	if err := os.WriteFile(sessionPath, []byte(sessionData), 0o600); err != nil {
+		t.Fatalf("write session: %v", err)
+	}
+
+	overridePath := filepath.Join(t.TempDir(), "session_repository_overrides.json")
+	overrideData := `{
+  "version": 1,
+  "rules": [
+    {
+      "cwd_prefix": "/home/makoto/codex-manager",
+      "repository_url": "https://github.com/makoto-soracom/codex-manager.git"
+    }
+  ]
+}
+`
+	if err := os.WriteFile(overridePath, []byte(overrideData), 0o600); err != nil {
+		t.Fatalf("write overrides: %v", err)
+	}
+
+	overrideStore, err := repooverride.LoadStore(overridePath)
+	if err != nil {
+		t.Fatalf("LoadStore: %v", err)
+	}
+
+	idx := sessions.NewIndex(sessionsDir)
+	if err := idx.Refresh(); err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+
+	server := NewServer(idx, nil, nil, sessionsDir, "", "", 3)
+	server.EnableRepoOverrides(overrideStore)
+	view, err := server.buildSessionView([]string{"2026", "03", "19", "branch-override.jsonl"})
+	if err != nil {
+		t.Fatalf("buildSessionView: %v", err)
+	}
+
+	if view.File.BranchURL != "https://github.com/makoto-soracom/codex-manager/tree/feature/session-branch" {
+		t.Fatalf("expected override branch url on session view, got %q", view.File.BranchURL)
 	}
 }
 

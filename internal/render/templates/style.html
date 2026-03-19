@@ -684,6 +684,7 @@ summary.meta {
 }
 .session-page-thread-field {
   display: inline-flex;
+  align-self: stretch;
   align-items: center;
   gap: 8px;
   min-width: 0;
@@ -692,9 +693,34 @@ summary.meta {
   border: 1px solid var(--border);
   background: rgba(255, 255, 255, 0.02);
 }
+.session-page-thread-field-link {
+  color: inherit;
+  text-decoration: none;
+}
+.session-page-thread-field-link:hover {
+  border-color: var(--accent);
+  background: rgba(255, 255, 255, 0.05);
+}
+.session-page-thread-field-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
 .session-page-thread-field span:last-child {
   min-width: 0;
   overflow-wrap: anywhere;
+}
+.session-page-branch-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  color: var(--accent);
+}
+.session-page-branch-icon-svg {
+  width: 14px;
+  height: 14px;
+  fill: currentColor;
 }
 .session-page-thread-actions .nav-btn,
 .session-page-thread-state-group,
@@ -1018,8 +1044,8 @@ summary.meta {
   border: 1px solid rgba(146, 196, 96, 0.36);
 }
 .tag-status-waiting-user {
-  background: rgba(122, 79, 35, 0.24);
-  border: 1px solid rgba(211, 154, 82, 0.36);
+  background: rgb(122, 79, 35);
+  border: 1px solid rgb(211, 154, 82);
 }
 .tag-status-waiting-agent {
   background: rgba(30, 92, 128, 0.24);

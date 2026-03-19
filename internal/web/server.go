@@ -189,17 +189,6 @@ type sessionView struct {
 	LastAssistantSnippetClass string
 }
 
-type sessionNavLink struct {
-	Path  string
-	Title string
-}
-
-type sessionNavView struct {
-	CwdLabel string
-	Prev     *sessionNavLink
-	Next     *sessionNavLink
-}
-
 type indexView struct {
 	Dates       []dateView
 	Dirs        []dirView
@@ -269,7 +258,6 @@ type sessionPageView struct {
 	LastUserLine        int
 	LastAgentLine       int
 	LastItemLine        int
-	CwdNav              *sessionNavView
 }
 
 type activeTabView struct {
@@ -1902,7 +1890,6 @@ func (s *Server) buildSessionView(parts []string) (sessionPageView, error) {
 		allMarkdown = strings.TrimSpace(strings.Join(allMarkdownParts, "\n\n")) + "\n"
 	}
 
-	cwdNav := buildSessionNav(s.idx, file)
 	threadStateKey, threadStatusLabel, threadStatusClass, threadAction, threadActionLabel, hasThreadState := s.sessionThreadState(file)
 
 	view := sessionPageView{
@@ -1943,7 +1930,6 @@ func (s *Server) buildSessionView(parts []string) (sessionPageView, error) {
 		LastUserLine:        lastUserLine,
 		LastAgentLine:       lastAgentLine,
 		LastItemLine:        lastItemLine,
-		CwdNav:              cwdNav,
 	}
 	if !hasThreadState {
 		view.ThreadStateKey = ""
@@ -2261,61 +2247,6 @@ func patchLineClass(line string) string {
 		return "patch-line-del"
 	default:
 		return "patch-line-context"
-	}
-}
-
-func buildSessionNav(idx *sessions.Index, current sessions.SessionFile) *sessionNavView {
-	cwd := sessions.CwdForFile(current)
-	if sessions.NormalizeCwd(cwd) == sessions.UnknownCwd {
-		return nil
-	}
-	files := idx.SessionsByCwd(cwd)
-	if len(files) < 2 {
-		return nil
-	}
-	sort.Slice(files, func(i, j int) bool {
-		if files[i].ModTime.Equal(files[j].ModTime) {
-			dateI := files[i].Date.String()
-			dateJ := files[j].Date.String()
-			if dateI != dateJ {
-				return dateI < dateJ
-			}
-			return files[i].Name < files[j].Name
-		}
-		return files[i].ModTime.Before(files[j].ModTime)
-	})
-	currentIndex := -1
-	for i := range files {
-		if files[i].Path == current.Path {
-			currentIndex = i
-			break
-		}
-	}
-	if currentIndex == -1 {
-		return nil
-	}
-	nav := &sessionNavView{CwdLabel: dirLabel(cwd)}
-	if currentIndex > 0 {
-		nav.Prev = buildSessionNavLink(files[currentIndex-1])
-	}
-	if currentIndex+1 < len(files) {
-		nav.Next = buildSessionNavLink(files[currentIndex+1])
-	}
-	if nav.Prev == nil && nav.Next == nil {
-		return nil
-	}
-	return nav
-}
-
-func buildSessionNavLink(file sessions.SessionFile) *sessionNavLink {
-	title := formatSessionLinkTitle(file)
-	mod := formatTime(file.ModTime)
-	if mod != "" {
-		title = title + " (" + mod + ")"
-	}
-	return &sessionNavLink{
-		Path:  "/" + file.Date.Path() + "/" + file.Name + "#last-user",
-		Title: title,
 	}
 }
 

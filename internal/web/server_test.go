@@ -402,6 +402,73 @@ func TestBuildSessionViewShowsBranchAndBranchAwareResumeCommand(t *testing.T) {
 	}
 }
 
+func TestBuildSessionViewOmitsSiblingSessionNavAndKeepsUserJumpControls(t *testing.T) {
+	sessionsDir := t.TempDir()
+	datePath := filepath.Join(sessionsDir, "2026", "03", "19")
+	if err := os.MkdirAll(datePath, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	olderPath := filepath.Join(datePath, "older.jsonl")
+	olderData := "" +
+		"{\"timestamp\":\"2026-03-19T00:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"session-older\",\"timestamp\":\"2026-03-19T00:00:00Z\",\"cwd\":\"/tmp/project\",\"originator\":\"cli\",\"cli_version\":\"0.1\"}}\n" +
+		"{\"timestamp\":\"2026-03-19T00:00:01Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"## My request for Codex:\\nOlder\"}]}}\n"
+	if err := os.WriteFile(olderPath, []byte(olderData), 0o600); err != nil {
+		t.Fatalf("write older session: %v", err)
+	}
+
+	currentPath := filepath.Join(datePath, "current.jsonl")
+	currentData := "" +
+		"{\"timestamp\":\"2026-03-19T00:10:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"session-current\",\"timestamp\":\"2026-03-19T00:10:00Z\",\"cwd\":\"/tmp/project\",\"git\":{\"branch\":\"feature/session-branch\",\"commit_hash\":\"abc123\"},\"originator\":\"cli\",\"cli_version\":\"0.1\"}}\n" +
+		"{\"timestamp\":\"2026-03-19T00:10:01Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"## My request for Codex:\\nCurrent\"}]}}\n"
+	if err := os.WriteFile(currentPath, []byte(currentData), 0o600); err != nil {
+		t.Fatalf("write current session: %v", err)
+	}
+
+	newerPath := filepath.Join(datePath, "newer.jsonl")
+	newerData := "" +
+		"{\"timestamp\":\"2026-03-19T00:20:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"session-newer\",\"timestamp\":\"2026-03-19T00:20:00Z\",\"cwd\":\"/tmp/project\",\"originator\":\"cli\",\"cli_version\":\"0.1\"}}\n" +
+		"{\"timestamp\":\"2026-03-19T00:20:01Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"## My request for Codex:\\nNewer\"}]}}\n"
+	if err := os.WriteFile(newerPath, []byte(newerData), 0o600); err != nil {
+		t.Fatalf("write newer session: %v", err)
+	}
+
+	idx := sessions.NewIndex(sessionsDir)
+	if err := idx.Refresh(); err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+
+	renderer, err := render.New()
+	if err != nil {
+		t.Fatalf("renderer: %v", err)
+	}
+
+	server := NewServer(idx, nil, renderer, sessionsDir, "", "", 3)
+	view, err := server.buildSessionView([]string{"2026", "03", "19", "current.jsonl"})
+	if err != nil {
+		t.Fatalf("buildSessionView: %v", err)
+	}
+
+	var buf bytes.Buffer
+	if err := renderer.Execute(&buf, "session", view); err != nil {
+		t.Fatalf("render session: %v", err)
+	}
+
+	html := buf.String()
+	if !strings.Contains(html, "CWD: /tmp/project") {
+		t.Fatalf("expected cwd in toolbar, got %s", html)
+	}
+	if !strings.Contains(html, "Branch: feature/session-branch") {
+		t.Fatalf("expected branch in toolbar, got %s", html)
+	}
+	if !strings.Contains(html, "Previous user message") || !strings.Contains(html, "Next user message") || !strings.Contains(html, "Last user message") {
+		t.Fatalf("expected user jump controls in toolbar, got %s", html)
+	}
+	if strings.Contains(html, "/2026/03/19/older.jsonl#last-user") || strings.Contains(html, "/2026/03/19/newer.jsonl#last-user") {
+		t.Fatalf("expected sibling session navigation links to be removed, got %s", html)
+	}
+}
+
 func TestBuildSessionViewRendersApplyPatchAsPatchBlock(t *testing.T) {
 	sessionsDir := t.TempDir()
 	datePath := filepath.Join(sessionsDir, "2026", "03", "18")

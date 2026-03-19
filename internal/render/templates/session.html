@@ -10,15 +10,52 @@
 <body class="{{ .ThemeClass }} has-sticky-header">
   <header class="sticky-header">
     <p class="subtitle"><a href="/">All dates</a> / <a href="/active">Active threads</a> / <a href="/notifications">Notifications</a> / {{ .Date.Label }}{{ if .File.ModTimeOnly }} {{ .File.ModTimeOnly }}{{ end }} ({{ .File.Size }})</p>
-    <h1 class="page-title">{{ .File.DisplayName }}{{ if .ResumeCommand }} <span class="title-links">(<a class="title-link nav-btn" href="#" data-copy-id="resume-cmd">▶️ Copy resume command</a> | <a class="title-link nav-btn" href="#" data-copy-id="md-all">📋 Copy thread as Markdown</a>)</span>{{ end }}</h1>
-      <p class="meta">{{ if .File.Cwd }}<a class="cwd-link nav-btn" href="/dir?cwd={{ .File.Cwd | urlquery }}" title="Back to this CWD">📂</a> CWD: {{ .File.Cwd }}{{ if .CwdNav }} {{ if .CwdNav.Prev }}<a class="nav-btn" href="{{ .CwdNav.Prev.Path }}" title="{{ .CwdNav.Prev.Title }}">⬅️</a>{{ else }}<span class="nav-btn disabled">⬅️</span>{{ end }}{{ if .CwdNav.Next }}<a class="nav-btn" href="{{ .CwdNav.Next.Path }}" title="{{ .CwdNav.Next.Title }}">➡️</a>{{ else }}<span class="nav-btn disabled">➡️</span>{{ end }}{{ end }}{{ end }}{{ if .File.Branch }}{{ if .File.Cwd }} | {{ end }}Branch: {{ .File.Branch }}{{ end }}
-      {{ if and .IsJSONL (gt .LastUserLine 0) }}{{ if or .File.Cwd .File.Branch }} | {{ end }}<a class="nav-btn" href="#last-user">🚀 Jump to last {{ .UserNavLabel }} message</a> | <a class="nav-btn" id="jump-user-prev" href="#" aria-label="Previous {{ .UserNavLabel }} message" title="Previous {{ .UserNavLabel }} message">⬆️</a><a class="nav-btn" id="jump-user-next" href="#" aria-label="Next {{ .UserNavLabel }} message" title="Next {{ .UserNavLabel }} message">⬇️</a>{{ end }}
-      <form class="share-form" method="post" action="/share/{{ .Date.Path }}/{{ .File.Name }}">
-        <button class="nav-btn" type="submit">Share</button>
-      </form>
-      {{ if .ThreadStateKey }} <span class="tag tag-status-{{ .ThreadStatusClass }}">{{ .ThreadStatusLabel }}</span> <button class="nav-btn" type="button" data-active-action="{{ .ThreadAction }}" data-active-key="{{ .ThreadStateKey }}">{{ .ThreadActionLabel }}</button>{{ end }}
-      {{ if .ParentSessionPath }} <a class="nav-btn" href="{{ .ParentSessionPath }}" target="_blank" rel="noopener noreferrer" title="{{ .ParentSessionTitle }}">Open agent thread</a>{{ end }}
-    </p>
+    <h1 class="page-title">{{ .File.DisplayName }}</h1>
+    <div class="session-page-toolbar">
+      <div class="session-page-toolbar-row session-page-thread-row">
+        <div class="session-page-thread-fields meta">
+          {{ if .File.Cwd }}
+          <span class="session-page-thread-field"><a class="cwd-link nav-btn" href="/dir?cwd={{ .File.Cwd | urlquery }}" title="Back to this CWD">📂</a><span>CWD: {{ .File.Cwd }}</span></span>
+          {{ end }}
+          {{ if .File.Branch }}
+          <span class="session-page-thread-field">Branch: {{ .File.Branch }}</span>
+          {{ end }}
+        </div>
+        <div class="session-page-thread-actions meta">
+          {{ if .ResumeCommand }}
+          <a class="title-link nav-btn" href="#" data-copy-id="resume-cmd">▶️ Copy resume command</a>
+          <span class="session-page-toolbar-separator" aria-hidden="true">|</span>
+          {{ end }}
+          <a class="title-link nav-btn" href="#" data-copy-id="md-all">📋 Copy thread as Markdown</a>
+          <span class="session-page-toolbar-separator" aria-hidden="true">|</span>
+          <form class="share-form" method="post" action="/share/{{ .Date.Path }}/{{ .File.Name }}">
+            <button class="nav-btn" type="submit">Share</button>
+          </form>
+          {{ if .ThreadStateKey }}
+          <span class="session-page-toolbar-separator" aria-hidden="true">|</span>
+          <span class="session-page-thread-state-group">
+            <span class="session-page-thread-state-label">STATE:</span>
+            <span class="tag tag-status-{{ .ThreadStatusClass }}">{{ .ThreadStatusLabel }}</span>
+            <button class="nav-btn" type="button" data-active-action="{{ .ThreadAction }}" data-active-key="{{ .ThreadStateKey }}">{{ .ThreadActionLabel }}</button>
+          </span>
+          {{ end }}
+          {{ if .ParentSessionPath }}
+          <span class="session-page-toolbar-separator" aria-hidden="true">|</span>
+          <a class="nav-btn" href="{{ .ParentSessionPath }}" target="_blank" rel="noopener noreferrer" title="{{ .ParentSessionTitle }}">Open agent thread</a>
+          {{ end }}
+        </div>
+      </div>
+      {{ if and .IsJSONL (gt .LastUserLine 0) }}
+      <div class="session-page-toolbar-row session-page-jump-row">
+        <span class="meta session-page-jump-label">Navigate this thread:</span>
+        <div class="session-page-jump-actions">
+          <a class="nav-btn" id="jump-user-prev" href="#" aria-label="Previous {{ .UserNavLabel }} message" title="Previous {{ .UserNavLabel }} message">⬆️ Previous {{ .UserNavLabel }} message</a>
+          <a class="nav-btn" id="jump-user-next" href="#" aria-label="Next {{ .UserNavLabel }} message" title="Next {{ .UserNavLabel }} message">⬇️ Next {{ .UserNavLabel }} message</a>
+          <a class="nav-btn" href="#last-user">🚀 Last {{ .UserNavLabel }} message</a>
+        </div>
+      </div>
+      {{ end }}
+    </div>
     <div id="share-banner" class="share-banner" role="status" aria-live="polite"></div>
     {{ if .ResumeCommand }}
     <textarea id="resume-cmd" class="copy-source">{{ .ResumeCommand }}</textarea>

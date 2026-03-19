@@ -282,6 +282,12 @@ func TestHandleSessionShowsThreadStateActionAndEndedState(t *testing.T) {
 		t.Fatalf("expected end action on session page, body=%s", body)
 	} else if !strings.Contains(body, "Waiting for user") {
 		t.Fatalf("expected waiting-user status on session page, body=%s", body)
+	} else if !strings.Contains(body, "STATE:") {
+		t.Fatalf("expected state label on session page, body=%s", body)
+	} else if !strings.Contains(body, "Navigate this thread:") {
+		t.Fatalf("expected navigate label on session page, body=%s", body)
+	} else if !strings.Contains(body, "Previous user message") || !strings.Contains(body, "Next user message") || !strings.Contains(body, "Last user message") {
+		t.Fatalf("expected user jump controls on session page, body=%s", body)
 	} else if !strings.Contains(body, `data-active-key="`+summary.Key+`"`) {
 		t.Fatalf("expected active key on session page, body=%s", body)
 	}

@@ -641,6 +641,90 @@ summary.meta {
   display: inline-block;
   margin: 0;
 }
+.session-page-toolbar {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.session-page-toolbar-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 14px;
+}
+.session-page-thread-row {
+  align-items: flex-start;
+}
+.session-page-thread-fields,
+.session-page-thread-actions,
+.session-page-jump-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.session-page-thread-fields {
+  min-width: 0;
+  flex: 0 1 auto;
+  align-items: flex-start;
+}
+.session-page-thread-actions {
+  margin-left: auto;
+  flex: 0 1 auto;
+  justify-content: flex-end;
+  row-gap: 10px;
+}
+.session-page-thread-state-group {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.session-page-thread-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 5px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.02);
+}
+.session-page-thread-field span:last-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.session-page-thread-actions .nav-btn,
+.session-page-thread-state-group,
+.session-page-toolbar-separator {
+  white-space: nowrap;
+}
+.session-page-thread-state-label,
+.session-page-jump-label {
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 11px;
+}
+.session-page-toolbar-separator {
+  color: var(--muted);
+  opacity: 0.8;
+}
+.session-page-jump-row {
+  justify-content: flex-start;
+  align-items: center;
+}
+@media (max-width: 1280px) {
+  .session-page-thread-actions {
+    flex-basis: 100%;
+    margin-left: 0;
+    justify-content: flex-start;
+  }
+  .session-page-thread-state-group {
+    justify-content: flex-start;
+  }
+}
 .share-banner {
   margin-top: 8px;
   padding: 8px 12px;
@@ -971,6 +1055,17 @@ summary.meta {
     flex-direction: column;
   }
   .active-session-actions {
+    justify-content: flex-start;
+  }
+  .session-page-toolbar-row {
+    align-items: flex-start;
+  }
+  .session-page-thread-actions {
+    justify-content: flex-start;
+    flex-basis: 100%;
+    margin-left: 0;
+  }
+  .session-page-thread-state-group {
     justify-content: flex-start;
   }
   .session-snippet-thread .snippet-item-left {

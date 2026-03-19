@@ -2,6 +2,8 @@ package web
 
 import (
 	"bytes"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -349,6 +351,109 @@ func TestSessionTemplateCollapsesToolOutputByDefault(t *testing.T) {
 	}
 	if count := strings.Count(html, `Reveal output`); count != 2 {
 		t.Fatalf("expected reveal output summaries for grouped and standalone outputs, got %d html=%s", count, html)
+	}
+}
+
+func TestSessionTemplateFetchesMarkdownOnDemand(t *testing.T) {
+	sessionsDir := t.TempDir()
+	datePath := filepath.Join(sessionsDir, "2026", "03", "19")
+	if err := os.MkdirAll(datePath, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	sessionPath := filepath.Join(datePath, "copy-markdown.jsonl")
+	sessionData := "" +
+		"{\"timestamp\":\"2026-03-19T00:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"session-copy\",\"timestamp\":\"2026-03-19T00:00:00Z\",\"cwd\":\"/tmp/project\",\"originator\":\"cli\",\"cli_version\":\"0.1\"}}\n" +
+		"{\"timestamp\":\"2026-03-19T00:00:01Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"## My request for Codex:\\nCopy me\"}]}}\n"
+	if err := os.WriteFile(sessionPath, []byte(sessionData), 0o600); err != nil {
+		t.Fatalf("write session: %v", err)
+	}
+
+	idx := sessions.NewIndex(sessionsDir)
+	if err := idx.Refresh(); err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+
+	renderer, err := render.New()
+	if err != nil {
+		t.Fatalf("renderer: %v", err)
+	}
+
+	server := NewServer(idx, nil, renderer, sessionsDir, "", "", 3)
+	view, err := server.buildSessionView([]string{"2026", "03", "19", "copy-markdown.jsonl"})
+	if err != nil {
+		t.Fatalf("buildSessionView: %v", err)
+	}
+
+	var buf bytes.Buffer
+	if err := renderer.Execute(&buf, "session", view); err != nil {
+		t.Fatalf("render session: %v", err)
+	}
+
+	html := buf.String()
+	if !strings.Contains(html, `data-copy-url="/markdown/2026/03/19/copy-markdown.jsonl"`) {
+		t.Fatalf("expected thread markdown fetch url, got %s", html)
+	}
+	if !strings.Contains(html, `data-copy-url="/markdown/2026/03/19/copy-markdown.jsonl?line=2"`) {
+		t.Fatalf("expected item markdown fetch url, got %s", html)
+	}
+	if strings.Contains(html, `id="md-all"`) || strings.Contains(html, `id="md-2"`) {
+		t.Fatalf("expected markdown textareas to be removed, got %s", html)
+	}
+	if !strings.Contains(html, `scrollToElement(userSections[target], "smooth")`) || !strings.Contains(html, `setTimeout(function () { scrollToElement(target); }, 0);`) {
+		t.Fatalf("expected smooth user navigation but instant initial jump, got %s", html)
+	}
+}
+
+func TestHandleSessionMarkdownReturnsThreadAndGroupedLineMarkdown(t *testing.T) {
+	sessionsDir := t.TempDir()
+	datePath := filepath.Join(sessionsDir, "2026", "03", "18")
+	if err := os.MkdirAll(datePath, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	sessionPath := filepath.Join(datePath, "markdown.jsonl")
+	sessionData := "" +
+		"{\"timestamp\":\"2026-03-18T00:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"session-md\",\"timestamp\":\"2026-03-18T00:00:00Z\",\"cwd\":\"/tmp\",\"originator\":\"cli\",\"cli_version\":\"0.1\"}}\n" +
+		"{\"timestamp\":\"2026-03-18T00:00:01Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"function_call\",\"name\":\"exec_command\",\"arguments\":\"{\\\"cmd\\\":\\\"pwd\\\",\\\"workdir\\\":\\\"/tmp/project\\\"}\",\"call_id\":\"call_exec\"}}\n" +
+		"{\"timestamp\":\"2026-03-18T00:00:02Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"function_call_output\",\"call_id\":\"call_exec\",\"output\":\"/tmp/project\"}}\n" +
+		"{\"timestamp\":\"2026-03-18T00:00:03Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"done\"}]}}\n"
+	if err := os.WriteFile(sessionPath, []byte(sessionData), 0o600); err != nil {
+		t.Fatalf("write session: %v", err)
+	}
+
+	idx := sessions.NewIndex(sessionsDir)
+	if err := idx.Refresh(); err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+
+	server := NewServer(idx, nil, nil, sessionsDir, "", "", 3)
+
+	req := httptest.NewRequest(http.MethodGet, "/markdown/2026/03/18/markdown.jsonl", nil)
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 for full markdown, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "## Tool run") || !strings.Contains(body, "### Tool call") || !strings.Contains(body, "### Tool output") || !strings.Contains(body, "## Agent") {
+		t.Fatalf("expected grouped thread markdown, got %q", body)
+	}
+	if got := rec.Header().Get("Content-Type"); got != "text/plain; charset=utf-8" {
+		t.Fatalf("unexpected content type: %q", got)
+	}
+
+	lineReq := httptest.NewRequest(http.MethodGet, "/markdown/2026/03/18/markdown.jsonl?line=3", nil)
+	lineRec := httptest.NewRecorder()
+	server.ServeHTTP(lineRec, lineReq)
+
+	if lineRec.Code != http.StatusOK {
+		t.Fatalf("expected 200 for grouped line markdown, got %d body=%s", lineRec.Code, lineRec.Body.String())
+	}
+	lineBody := lineRec.Body.String()
+	if !strings.Contains(lineBody, "## Tool run") || !strings.Contains(lineBody, "### Tool output") || strings.Contains(lineBody, "## Agent") {
+		t.Fatalf("expected grouped markdown for output line only, got %q", lineBody)
 	}
 }
 

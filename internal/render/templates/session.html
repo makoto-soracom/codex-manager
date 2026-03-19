@@ -30,7 +30,7 @@
           <a class="title-link nav-btn" href="#" data-copy-id="resume-cmd">▶️ Copy resume command</a>
           <span class="session-page-toolbar-separator" aria-hidden="true">|</span>
           {{ end }}
-          <a class="title-link nav-btn" href="#" data-copy-id="md-all">📋 Copy thread as Markdown</a>
+          <a class="title-link nav-btn" href="#" data-copy-url="/markdown/{{ .Date.Path }}/{{ .File.Name }}">📋 Copy thread as Markdown</a>
           <span class="session-page-toolbar-separator" aria-hidden="true">|</span>
           <form class="share-form" method="post" action="/share/{{ .Date.Path }}/{{ .File.Name }}">
             <button class="nav-btn" type="submit">Share</button>
@@ -64,7 +64,6 @@
     {{ if .ResumeCommand }}
     <textarea id="resume-cmd" class="copy-source">{{ .ResumeCommand }}</textarea>
     {{ end }}
-    <textarea id="md-all" class="copy-source">{{ .AllMarkdown }}</textarea>
   </header>
   <main>
     <span id="page-top" class="session-anchor"></span>
@@ -104,7 +103,7 @@
           {{ if .SubagentID }}<span class="meta subagent-id">{{ .SubagentID }}</span>{{ end }}
           {{ if .SubagentSessionPath }}<a class="nav-btn subagent-link" href="{{ .SubagentSessionPath }}" target="_blank" rel="noopener noreferrer" title="{{ .SubagentSessionTitle }}">Open subagent thread</a>{{ end }}
           {{ if .ToolRunOutputLine }}<span class="meta">Lines {{ .Line }} / {{ .ToolRunOutputLine }}</span>{{ else }}<span class="meta">Line {{ .Line }}</span>{{ end }}
-          <button class="copy-btn" type="button" data-copy-id="md-{{ .Line }}" aria-label="Copy Markdown" title="Copy Markdown">📋</button><button class="copy-btn" type="button" data-copy-link="line-{{ .Line }}" aria-label="Copy Link" title="Copy Link">🔗</button>
+          <button class="copy-btn" type="button" data-copy-url="/markdown/{{ $.Date.Path }}/{{ $.File.Name }}?line={{ .Line }}" aria-label="Copy Markdown" title="Copy Markdown">📋</button><button class="copy-btn" type="button" data-copy-link="line-{{ .Line }}" aria-label="Copy Link" title="Copy Link">🔗</button>
         </div>
         {{ if .ToolRunOutputLine }}
         <div class="tool-run-part tool-run-part-call">
@@ -144,7 +143,6 @@
         {{ end }}
         <div class="session-content markdown">{{ .HTML }}</div>
         {{ end }}
-        <textarea id="md-{{ .Line }}" class="copy-source">{{ .Markdown }}</textarea>
         {{ end }}
       </section>
       {{ end }}
@@ -172,13 +170,17 @@
         var scrollY = window.scrollY || window.pageYOffset || 0;
         return rect.top + scrollY;
       }
-      function scrollToElement(element) {
+      function scrollToElement(element, behavior) {
         if (!element) return;
         var offset = getStickyOffset() + 8;
         var top = getElementTop(element) - offset;
         if (top < 0) top = 0;
         if (typeof window.scrollTo === "function") {
-          window.scrollTo({ top: top, behavior: "smooth" });
+          if (behavior) {
+            window.scrollTo({ top: top, behavior: behavior });
+          } else {
+            window.scrollTo(0, top);
+          }
         } else {
           window.scrollTop = top;
         }
@@ -200,10 +202,26 @@
         document.body.removeChild(area);
       }
 
+      var copyCache = Object.create(null);
+      function fetchCopyText(url) {
+        if (copyCache[url]) {
+          return Promise.resolve(copyCache[url]);
+        }
+        return fetch(url, { credentials: "same-origin" })
+          .then(function (response) {
+            if (!response.ok) throw new Error("copy fetch failed");
+            return response.text();
+          })
+          .then(function (text) {
+            copyCache[url] = text;
+            return text;
+          });
+      }
+
       document.addEventListener("click", function (event) {
         var target = event.target;
         if (!(target instanceof HTMLElement)) return;
-        var trigger = target.closest("[data-copy-id],[data-copy-link]");
+        var trigger = target.closest("[data-copy-id],[data-copy-link],[data-copy-url]");
         if (!trigger) return;
         event.preventDefault();
         var id = trigger.getAttribute("data-copy-id");
@@ -212,6 +230,15 @@
           if (!source) return;
           var text = source.value || source.textContent || "";
           copyText(text, trigger);
+          return;
+        }
+        var copyURL = trigger.getAttribute("data-copy-url");
+        if (copyURL) {
+          fetchCopyText(copyURL)
+            .then(function (text) {
+              copyText(text, trigger);
+            })
+            .catch(function () {});
           return;
         }
         var anchorId = trigger.getAttribute("data-copy-link");
@@ -323,14 +350,14 @@
           if (!userSections.length) return;
           var index = findCurrentIndex();
           var target = index <= 0 ? 0 : index - 1;
-          scrollToElement(userSections[target]);
+          scrollToElement(userSections[target], "smooth");
         };
         var goNext = function (event) {
           if (event) event.preventDefault();
           if (!userSections.length) return;
           var index = findCurrentIndex();
           var target = index < 0 ? 0 : Math.min(index + 1, userSections.length - 1);
-          scrollToElement(userSections[target]);
+          scrollToElement(userSections[target], "smooth");
         };
         if (jumpPrev) jumpPrev.addEventListener("click", goPrev);
         if (jumpNext) jumpNext.addEventListener("click", goNext);

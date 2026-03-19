@@ -136,6 +136,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleSearch(w, r)
 		return
 	}
+	if strings.HasPrefix(pathValue, "markdown/") {
+		s.handleSessionMarkdown(w, r, strings.TrimPrefix(pathValue, "markdown/"))
+		return
+	}
 	if strings.HasPrefix(pathValue, "raw/") {
 		s.handleRaw(w, r, strings.TrimPrefix(pathValue, "raw/"))
 		return
@@ -254,7 +258,6 @@ type sessionPageView struct {
 	ParentSessionTitle  string
 	UserNavLabel        string
 	Items               []itemView
-	AllMarkdown         string
 	ResumeCommand       string
 	ThreadStateKey      string
 	ThreadStatusLabel   string
@@ -687,6 +690,50 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request, parts []s
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = s.renderer.Execute(w, "session", view)
+}
+
+func (s *Server) handleSessionMarkdown(w http.ResponseWriter, r *http.Request, path string) {
+	if r.Method != http.MethodGet {
+		http.NotFound(w, r)
+		return
+	}
+
+	parts := strings.Split(path, "/")
+	if len(parts) != 4 {
+		http.NotFound(w, r)
+		return
+	}
+
+	view, err := s.buildSessionView(parts)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	line := 0
+	if rawLine := strings.TrimSpace(r.URL.Query().Get("line")); rawLine != "" {
+		parsed, err := strconv.Atoi(rawLine)
+		if err != nil || parsed <= 0 {
+			http.Error(w, "invalid line", http.StatusBadRequest)
+			return
+		}
+		line = parsed
+	}
+
+	var markdown string
+	if line > 0 {
+		var ok bool
+		markdown, ok = sessionItemMarkdown(view.Items, line)
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+	} else {
+		markdown = joinItemMarkdown(view.Items)
+	}
+
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	_, _ = io.WriteString(w, markdown)
 }
 
 type searchResponse struct {
@@ -1883,7 +1930,6 @@ func (s *Server) buildSessionView(parts []string) (sessionPageView, error) {
 	toolRunOutputs := findToolRunOutputs(session.Items)
 	groupedOutputIndexes := make(map[int]struct{}, len(toolRunOutputs))
 	items := make([]itemView, 0, len(session.Items))
-	allMarkdownParts := make([]string, 0, len(session.Items))
 	lastUserLine := 0
 	lastAnyUserLine := 0
 	lastAgentLine := 0
@@ -1928,7 +1974,6 @@ func (s *Server) buildSessionView(parts []string) (sessionPageView, error) {
 			if outputItem.Line > lastItemLine {
 				lastItemLine = outputItem.Line
 			}
-			allMarkdownParts = append(allMarkdownParts, grouped.Markdown)
 			items = append(items, grouped)
 			continue
 		}
@@ -1950,15 +1995,10 @@ func (s *Server) buildSessionView(parts []string) (sessionPageView, error) {
 		if item.Line > lastItemLine {
 			lastItemLine = item.Line
 		}
-		allMarkdownParts = append(allMarkdownParts, view.Markdown)
 		items = append(items, view)
 	}
 	if lastUserLine == 0 {
 		lastUserLine = lastAnyUserLine
-	}
-	allMarkdown := ""
-	if len(allMarkdownParts) > 0 {
-		allMarkdown = strings.TrimSpace(strings.Join(allMarkdownParts, "\n\n")) + "\n"
 	}
 
 	threadStateKey, threadStatusLabel, threadStatusClass, threadAction, threadActionLabel, hasThreadState := s.sessionThreadState(file)
@@ -1990,7 +2030,6 @@ func (s *Server) buildSessionView(parts []string) (sessionPageView, error) {
 		ParentSessionTitle:  parentSessionTitle,
 		UserNavLabel:        userNavLabel,
 		Items:               items,
-		AllMarkdown:         allMarkdown,
 		ResumeCommand:       buildResumeCommand(session.Meta),
 		ThreadStateKey:      threadStateKey,
 		ThreadStatusLabel:   threadStatusLabel,
@@ -2432,6 +2471,36 @@ func renderSessionMarkdown(items []sessions.RenderItem) string {
 		parts = append(parts, renderItemMarkdown(item))
 	}
 	return strings.TrimSpace(strings.Join(parts, "\n\n")) + "\n"
+}
+
+func joinItemMarkdown(items []itemView) string {
+	if len(items) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(items))
+	for _, item := range items {
+		if strings.TrimSpace(item.Markdown) == "" {
+			continue
+		}
+		parts = append(parts, item.Markdown)
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(strings.Join(parts, "\n\n")) + "\n"
+}
+
+func sessionItemMarkdown(items []itemView, line int) (string, bool) {
+	for _, item := range items {
+		if item.Line != line && item.ToolRunOutputLine != line {
+			continue
+		}
+		if strings.TrimSpace(item.Markdown) == "" {
+			return "", false
+		}
+		return item.Markdown, true
+	}
+	return "", false
 }
 
 func escapeAutoContextTags(text string) string {

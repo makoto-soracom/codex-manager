@@ -405,6 +405,121 @@ func TestSessionTemplateFetchesMarkdownOnDemand(t *testing.T) {
 	}
 }
 
+func TestSessionTemplateGroupsConsecutiveToolRunsUnderOneHeader(t *testing.T) {
+	sessionsDir := t.TempDir()
+	datePath := filepath.Join(sessionsDir, "2026", "03", "18")
+	if err := os.MkdirAll(datePath, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	sessionPath := filepath.Join(datePath, "tool-run-group-header.jsonl")
+	sessionData := "" +
+		"{\"timestamp\":\"2026-03-18T00:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"session-group\",\"timestamp\":\"2026-03-18T00:00:00Z\",\"cwd\":\"/tmp\",\"originator\":\"cli\",\"cli_version\":\"0.1\"}}\n" +
+		"{\"timestamp\":\"2026-03-18T00:00:01Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"function_call\",\"name\":\"exec_command\",\"arguments\":\"{\\\"cmd\\\":\\\"pwd\\\",\\\"workdir\\\":\\\"/tmp/project\\\"}\",\"call_id\":\"call_a\"}}\n" +
+		"{\"timestamp\":\"2026-03-18T00:00:02Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"function_call\",\"name\":\"exec_command\",\"arguments\":\"{\\\"cmd\\\":\\\"ls\\\",\\\"workdir\\\":\\\"/tmp/project\\\"}\",\"call_id\":\"call_b\"}}\n" +
+		"{\"timestamp\":\"2026-03-18T00:00:03Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"function_call_output\",\"call_id\":\"call_a\",\"output\":\"/tmp/project\"}}\n" +
+		"{\"timestamp\":\"2026-03-18T00:00:04Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"function_call_output\",\"call_id\":\"call_b\",\"output\":\"file.txt\"}}\n"
+	if err := os.WriteFile(sessionPath, []byte(sessionData), 0o600); err != nil {
+		t.Fatalf("write session: %v", err)
+	}
+
+	idx := sessions.NewIndex(sessionsDir)
+	if err := idx.Refresh(); err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+
+	renderer, err := render.New()
+	if err != nil {
+		t.Fatalf("renderer: %v", err)
+	}
+
+	server := NewServer(idx, nil, renderer, sessionsDir, "", "", 3)
+	view, err := server.buildSessionView([]string{"2026", "03", "18", "tool-run-group-header.jsonl"})
+	if err != nil {
+		t.Fatalf("buildSessionView: %v", err)
+	}
+
+	var buf bytes.Buffer
+	if err := renderer.Execute(&buf, "session", view); err != nil {
+		t.Fatalf("render session: %v", err)
+	}
+
+	html := buf.String()
+	if count := strings.Count(html, `class="session-group-details">`); count != 1 {
+		t.Fatalf("expected 1 collapsed tool-run group details, got %d html=%s", count, html)
+	}
+	if strings.Contains(html, `class="session-group-details" open>`) {
+		t.Fatalf("expected tool-run group to stay collapsed by default, got %s", html)
+	}
+	if !strings.Contains(html, "Tool run 2") {
+		t.Fatalf("expected grouped tool-run title, got %s", html)
+	}
+	if !strings.Contains(html, `window.addEventListener("hashchange", handleInitialJump)`) || !strings.Contains(html, `openAncestorDetails(target);`) {
+		t.Fatalf("expected hash jump to open collapsed tool-run groups, got %s", html)
+	}
+	if !strings.Contains(html, `scrollToElement(summary || lastItem);`) {
+		t.Fatalf("expected default jump to keep collapsed tool-run groups closed, got %s", html)
+	}
+	if strings.Count(html, `class="session-header"`) != 0 {
+		t.Fatalf("expected grouped tool runs to hide repeated item headers, got %s", html)
+	}
+	if count := strings.Count(html, `class="tool-run-part-actions"`); count != 2 {
+		t.Fatalf("expected inline tool-run actions for each grouped item, got %d html=%s", count, html)
+	}
+	if count := strings.Count(html, `data-copy-url="/markdown/2026/03/18/tool-run-group-header.jsonl?line=`); count != 2 {
+		t.Fatalf("expected 2 grouped markdown copy actions, got %d html=%s", count, html)
+	}
+}
+
+func TestSessionTemplateShowsSingleToolRunGroupHeader(t *testing.T) {
+	sessionsDir := t.TempDir()
+	datePath := filepath.Join(sessionsDir, "2026", "03", "18")
+	if err := os.MkdirAll(datePath, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	sessionPath := filepath.Join(datePath, "tool-run-single-group-header.jsonl")
+	sessionData := "" +
+		"{\"timestamp\":\"2026-03-18T00:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"session-group-1\",\"timestamp\":\"2026-03-18T00:00:00Z\",\"cwd\":\"/tmp\",\"originator\":\"cli\",\"cli_version\":\"0.1\"}}\n" +
+		"{\"timestamp\":\"2026-03-18T00:00:01Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"function_call\",\"name\":\"exec_command\",\"arguments\":\"{\\\"cmd\\\":\\\"pwd\\\",\\\"workdir\\\":\\\"/tmp/project\\\"}\",\"call_id\":\"call_a\"}}\n" +
+		"{\"timestamp\":\"2026-03-18T00:00:02Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"function_call_output\",\"call_id\":\"call_a\",\"output\":\"/tmp/project\"}}\n"
+	if err := os.WriteFile(sessionPath, []byte(sessionData), 0o600); err != nil {
+		t.Fatalf("write session: %v", err)
+	}
+
+	idx := sessions.NewIndex(sessionsDir)
+	if err := idx.Refresh(); err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+
+	renderer, err := render.New()
+	if err != nil {
+		t.Fatalf("renderer: %v", err)
+	}
+
+	server := NewServer(idx, nil, renderer, sessionsDir, "", "", 3)
+	view, err := server.buildSessionView([]string{"2026", "03", "18", "tool-run-single-group-header.jsonl"})
+	if err != nil {
+		t.Fatalf("buildSessionView: %v", err)
+	}
+
+	var buf bytes.Buffer
+	if err := renderer.Execute(&buf, "session", view); err != nil {
+		t.Fatalf("render session: %v", err)
+	}
+
+	html := buf.String()
+	if count := strings.Count(html, `class="session-group-details">`); count != 1 {
+		t.Fatalf("expected 1 collapsed single tool-run group details, got %d html=%s", count, html)
+	}
+	if !strings.Contains(html, "Tool run 1") {
+		t.Fatalf("expected single grouped tool-run title, got %s", html)
+	}
+	if strings.Count(html, `class="session-header"`) != 0 {
+		t.Fatalf("expected single grouped tool run to hide repeated item header, got %s", html)
+	}
+}
+
 func TestHandleSessionMarkdownReturnsThreadAndGroupedLineMarkdown(t *testing.T) {
 	sessionsDir := t.TempDir()
 	datePath := filepath.Join(sessionsDir, "2026", "03", "18")
@@ -714,6 +829,15 @@ func TestBuildSessionViewGroupsAdjacentToolCallAndOutputByCallID(t *testing.T) {
 	if item.Title != "Tool run" || item.Subtype != "tool_run" {
 		t.Fatalf("expected grouped tool run item, got %#v", item)
 	}
+	if item.ToolRunGroupTitle != "Tool run 1" {
+		t.Fatalf("expected grouped header title on single item, got %q", item.ToolRunGroupTitle)
+	}
+	if !item.ToolRunHideHeader {
+		t.Fatalf("expected single grouped tool run header to be hidden")
+	}
+	if !item.ToolRunGroupEnd {
+		t.Fatalf("expected single grouped tool run to close group")
+	}
 	if item.ToolRunOutputLine != 3 {
 		t.Fatalf("expected grouped output line 3, got %d", item.ToolRunOutputLine)
 	}
@@ -764,6 +888,18 @@ func TestBuildSessionViewGroupsNonAdjacentToolCallAndOutputByCallID(t *testing.T
 	if first.Title != "Tool run" || first.Subtype != "tool_run" {
 		t.Fatalf("expected first grouped tool run item, got %#v", first)
 	}
+	if first.ToolRunGroupTitle != "Tool run 2" {
+		t.Fatalf("expected grouped header title on first item, got %q", first.ToolRunGroupTitle)
+	}
+	if !first.ToolRunHideHeader {
+		t.Fatalf("expected first grouped tool run header to be hidden")
+	}
+	if first.ToolRunGroupLastLine != 5 {
+		t.Fatalf("expected first grouped tool run last line 5, got %d", first.ToolRunGroupLastLine)
+	}
+	if first.ToolRunGroupEnd {
+		t.Fatalf("expected first grouped tool run not to close group")
+	}
 	if first.ToolRunOutputLine != 4 {
 		t.Fatalf("expected first grouped output line 4, got %d", first.ToolRunOutputLine)
 	}
@@ -774,6 +910,15 @@ func TestBuildSessionViewGroupsNonAdjacentToolCallAndOutputByCallID(t *testing.T
 	second := view.Items[1]
 	if second.Title != "Tool run" || second.Subtype != "tool_run" {
 		t.Fatalf("expected second grouped tool run item, got %#v", second)
+	}
+	if second.ToolRunGroupTitle != "" {
+		t.Fatalf("expected only first grouped item to carry group title, got %q", second.ToolRunGroupTitle)
+	}
+	if !second.ToolRunHideHeader {
+		t.Fatalf("expected second grouped tool run header to be hidden")
+	}
+	if !second.ToolRunGroupEnd {
+		t.Fatalf("expected second grouped tool run to close group")
 	}
 	if second.ToolRunOutputLine != 5 {
 		t.Fatalf("expected second grouped output line 5, got %d", second.ToolRunOutputLine)

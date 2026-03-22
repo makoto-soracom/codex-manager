@@ -646,6 +646,43 @@ summary.meta {
   align-items: baseline;
   margin-bottom: 10px;
 }
+.session-group-details {
+  margin: 8px 0 10px;
+}
+.session-group-details[open] {
+  margin-bottom: 16px;
+}
+.session-group-header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: baseline;
+  margin-right: 33%;
+  padding: 0 4px;
+  cursor: pointer;
+  list-style: none;
+}
+.session-group-header::-webkit-details-marker {
+  display: none;
+}
+.session-group-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.session-group-title::before {
+  content: "▶";
+  display: inline-block;
+  margin-right: 8px;
+  font-size: 11px;
+  transition: transform 0.14s ease;
+}
+.session-group-details[open] .session-group-title::before {
+  transform: rotate(90deg);
+}
+.session-group-body {
+  margin-top: 10px;
+}
 .copy-btn {
   border: 1px solid var(--border);
   background: transparent;
@@ -983,6 +1020,18 @@ summary.meta {
   align-items: center;
   gap: 8px;
 }
+.tool-run-part-actions {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.session-item.tool-run-group-member {
+  margin-bottom: 10px;
+}
+.session-item.tool-run-group-member.tool-run-group-end {
+  margin-bottom: 16px;
+}
 .session-content blockquote {
   margin: 0 0 0.9em;
   padding-left: 12px;
@@ -1131,6 +1180,12 @@ summary.meta {
   }
   .session-item.role-assistant,
   .session-item.role-tool {
+    margin-right: 12%;
+  }
+  .session-group-details {
+    margin-right: 0;
+  }
+  .session-group-header {
     margin-right: 12%;
   }
 }

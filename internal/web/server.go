@@ -376,6 +376,11 @@ type itemView struct {
 	ToolRunOutputTitle   string
 	ToolRunOutputHTML    template.HTML
 	ToolRunOutputTime    string
+	ToolRunGroupTitle    string
+	ToolRunGroupCount    int
+	ToolRunGroupLastLine int
+	ToolRunGroupEnd      bool
+	ToolRunHideHeader    bool
 }
 
 type updatePlanHTMLArgs struct {
@@ -2010,6 +2015,7 @@ func (s *Server) buildSessionView(parts []string) (sessionPageView, error) {
 	if lastUserLine == 0 {
 		lastUserLine = lastAnyUserLine
 	}
+	annotateToolRunGroups(items)
 
 	threadStateKey, threadStatusLabel, threadStatusClass, threadAction, threadActionLabel, hasThreadState := s.sessionThreadState(file)
 
@@ -2244,6 +2250,72 @@ func buildToolRunView(callItem sessions.RenderItem, callView itemView, outputIte
 		ToolRunOutputHTML:  outputView.HTML,
 		ToolRunOutputTime:  outputItem.Timestamp,
 	}
+}
+
+func annotateToolRunGroups(items []itemView) {
+	for start := 0; start < len(items); start++ {
+		if !isGroupedToolRunView(items[start]) {
+			continue
+		}
+
+		end := start + 1
+		for end < len(items) && isGroupedToolRunView(items[end]) {
+			end++
+		}
+		count := end - start
+
+		lastLine := items[end-1].Line
+		if outputLine := items[end-1].ToolRunOutputLine; outputLine > lastLine {
+			lastLine = outputLine
+		}
+		items[start].ToolRunGroupTitle = toolRunGroupTitle(items[start:end])
+		items[start].ToolRunGroupCount = count
+		items[start].ToolRunGroupLastLine = lastLine
+		items[end-1].ToolRunGroupEnd = true
+
+		for index := start; index < end; index++ {
+			items[index].ToolRunHideHeader = true
+			items[index].ToolRunGroupCount = count
+			items[index].Class = strings.TrimSpace(items[index].Class + " tool-run-group-member")
+			if index == start {
+				items[index].Class = strings.TrimSpace(items[index].Class + " tool-run-group-start")
+			}
+			if index == end-1 {
+				items[index].Class = strings.TrimSpace(items[index].Class + " tool-run-group-end")
+			}
+		}
+
+		start = end - 1
+	}
+}
+
+func isGroupedToolRunView(item itemView) bool {
+	if item.ToolRunOutputLine == 0 {
+		return false
+	}
+	switch item.Subtype {
+	case "tool_run", "custom_tool_run":
+		return true
+	default:
+		return false
+	}
+}
+
+func toolRunGroupTitle(items []itemView) string {
+	if len(items) == 0 {
+		return ""
+	}
+
+	title := strings.TrimSpace(items[0].Title)
+	if title == "" {
+		title = "Tool run"
+	}
+	for _, item := range items[1:] {
+		if strings.TrimSpace(item.Title) != title {
+			return fmt.Sprintf("Tool run %d", len(items))
+		}
+	}
+	return fmt.Sprintf("%s %d", title, len(items))
 }
 
 func renderCustomToolCallMetaMarkdown(item sessions.RenderItem) string {

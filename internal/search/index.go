@@ -1,7 +1,16 @@
 package search
 
 import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -11,11 +20,12 @@ import (
 )
 
 const (
-	defaultLimit  = 50
-	maxLimit      = 200
-	snippetRadius = 60
-	snippetMax    = 180
-	contextMax    = 140
+	defaultLimit    = 50
+	maxLimit        = 200
+	snippetRadius   = 60
+	snippetMax      = 180
+	contextMax      = 140
+	searchBatchSize = 256
 )
 
 // Result describes a single search match.
@@ -37,6 +47,14 @@ type Result struct {
 	sortTime time.Time
 }
 
+// Page contains one search result page and its total size.
+type Page struct {
+	Results []Result
+	Offset  int
+	Limit   int
+	Total   int
+}
+
 type entry struct {
 	date        string
 	timestamp   string
@@ -48,7 +66,6 @@ type entry struct {
 	line        int
 	role        string
 	content     string
-	lower       string
 	prevUser    string
 	nextAsst    string
 	prevLine    int
@@ -67,236 +84,382 @@ type threadPairState struct {
 	hasAssistantHit bool
 }
 
-type fileIndex struct {
-	size       int64
-	modTime    time.Time
-	threadName string
-	entries    []entry
+type lineMatcher struct {
+	lines []int
 }
 
-// Index stores a searchable snapshot of sessions.
+// Index stores a lightweight searchable snapshot of session files.
 type Index struct {
-	mu      sync.RWMutex
-	files   map[string]fileIndex
-	ordered []entry
+	mu       sync.RWMutex
+	files    map[string]sessions.SessionFile
+	rgPath   string
+	grepPath string
 }
 
 // NewIndex creates an empty search index.
 func NewIndex() *Index {
-	return &Index{files: map[string]fileIndex{}}
+	return &Index{
+		files:    map[string]sessions.SessionFile{},
+		rgPath:   lookupSearchBinary("rg"),
+		grepPath: lookupSearchBinary("grep"),
+	}
 }
 
-// RefreshFrom rebuilds entries for new or changed files in the sessions index.
+// RefreshFrom snapshots session file metadata for later query-time searching.
 func (idx *Index) RefreshFrom(sessionsIdx *sessions.Index) error {
 	dates := sessionsIdx.Dates()
-	files := make([]sessions.SessionFile, 0, len(dates))
-	for _, date := range dates {
-		files = append(files, sessionsIdx.SessionsByDate(date)...)
-	}
-
-	idx.mu.RLock()
-	existing := idx.files
-	idx.mu.RUnlock()
-
-	next := make(map[string]fileIndex, len(files))
-	toParse := make([]sessions.SessionFile, 0)
-	for _, file := range files {
-		key := file.Path
-		if meta, ok := existing[key]; ok && meta.size == file.Size && meta.modTime.Equal(file.ModTime) && meta.threadName == file.ThreadName {
-			next[key] = meta
-			continue
-		}
-		toParse = append(toParse, file)
-	}
-
-	var firstErr error
-	for _, file := range toParse {
-		entries, err := buildEntries(file)
-		if err != nil {
-			if firstErr == nil {
-				firstErr = err
-			}
-			if meta, ok := existing[file.Path]; ok {
-				next[file.Path] = meta
-			}
-			continue
-		}
-		next[file.Path] = fileIndex{size: file.Size, modTime: file.ModTime, threadName: file.ThreadName, entries: entries}
-	}
-
-	ordered := make([]entry, 0)
+	files := make(map[string]sessions.SessionFile)
 	for _, date := range dates {
 		for _, file := range sessionsIdx.SessionsByDate(date) {
-			if meta, ok := next[file.Path]; ok {
-				ordered = append(ordered, meta.entries...)
-			}
+			files[file.Path] = file
 		}
 	}
 
 	idx.mu.Lock()
-	idx.files = next
-	idx.ordered = ordered
+	idx.files = files
 	idx.mu.Unlock()
-
-	return firstErr
+	return nil
 }
 
 // Search returns the first N matches for the query.
 func (idx *Index) Search(query string, limit int) []Result {
-	return idx.SearchWithCwd(query, limit, "")
+	page, err := idx.SearchPageWithCwdContext(context.Background(), query, limit, 0, "")
+	if err != nil {
+		return nil
+	}
+	return page.Results
 }
 
 // SearchWithCwd returns the first N matches for the query filtered by cwd.
-// If cwdFilter is empty, it behaves like Search.
 func (idx *Index) SearchWithCwd(query string, limit int, cwdFilter string) []Result {
-	q := strings.TrimSpace(query)
-	if q == "" {
+	page, err := idx.SearchPageWithCwdContext(context.Background(), query, limit, 0, cwdFilter)
+	if err != nil {
 		return nil
 	}
-	if limit <= 0 {
-		limit = defaultLimit
-	}
-	if limit > maxLimit {
-		limit = maxLimit
+	return page.Results
+}
+
+// SearchPageWithCwdContext returns one result page filtered by cwd.
+func (idx *Index) SearchPageWithCwdContext(ctx context.Context, query string, limit int, offset int, cwdFilter string) (Page, error) {
+	q := strings.TrimSpace(query)
+	limit = normalizeLimit(limit)
+	if offset < 0 {
+		offset = 0
 	}
 	cwdFilter = normalizeCwdFilter(cwdFilter)
-	lower := strings.ToLower(q)
+	if q == "" {
+		return Page{Offset: offset, Limit: limit}, nil
+	}
 
+	files, rgPath, grepPath := idx.snapshotFiles(cwdFilter)
+	if len(files) == 0 {
+		return Page{Offset: offset, Limit: limit}, nil
+	}
+
+	rawHits, err := collectRawHits(ctx, q, files, rgPath, grepPath)
+	if err != nil {
+		return Page{}, err
+	}
+
+	matched := make([]entry, 0, len(rawHits))
+	for _, file := range files {
+		lines := rawHits[file.Path]
+		if len(lines) == 0 {
+			continue
+		}
+		entries, err := buildEntries(file, newLineMatcher(lines))
+		if err != nil {
+			continue
+		}
+		matched = append(matched, entries...)
+	}
+
+	return buildPageFromEntries(matched, q, limit, offset), nil
+}
+
+func (idx *Index) snapshotFiles(cwdFilter string) ([]sessions.SessionFile, string, string) {
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
 
-	matches := make([]entry, 0, limit)
-	pairStates := make(map[threadPairKey]threadPairState)
-	for _, item := range idx.ordered {
-		if !matchesCwdFilter(item.cwd, cwdFilter) {
+	files := make([]sessions.SessionFile, 0, len(idx.files))
+	for _, file := range idx.files {
+		if !matchesCwdFilter(sessions.CwdForFile(file), cwdFilter) {
 			continue
 		}
-		if strings.Index(item.lower, lower) == -1 {
-			continue
-		}
-		matches = append(matches, item)
-		if key, ok := pairKeyForEntry(item); ok {
-			state := pairStates[key]
-			switch item.role {
-			case "user":
-				state.hasUserHit = true
-			case "assistant":
-				state.hasAssistantHit = true
-			}
-			pairStates[key] = state
-		}
+		files = append(files, file)
 	}
-
-	sort.SliceStable(matches, func(i, j int) bool {
-		return matches[i].sortTime.After(matches[j].sortTime)
+	sort.Slice(files, func(i, j int) bool {
+		if files[i].Date.String() == files[j].Date.String() {
+			return files[i].Name < files[j].Name
+		}
+		return files[i].Date.String() > files[j].Date.String()
 	})
+	return files, idx.rgPath, idx.grepPath
+}
 
-	results := make([]Result, 0, limit)
-	for _, item := range matches {
-		if shouldSkipAssistantDuplicate(item, pairStates) {
+func collectRawHits(ctx context.Context, query string, files []sessions.SessionFile, rgPath string, grepPath string) (map[string][]int, error) {
+	if rgPath != "" {
+		hits, err := runRipgrep(ctx, rgPath, query, files)
+		if err == nil {
+			return hits, nil
+		}
+		if ctx.Err() != nil {
+			return nil, err
+		}
+	}
+	if grepPath != "" {
+		hits, err := runGrep(ctx, grepPath, query, files)
+		if err == nil {
+			return hits, nil
+		}
+		if ctx.Err() != nil {
+			return nil, err
+		}
+	}
+	return scanFiles(ctx, query, files)
+}
+
+func runRipgrep(ctx context.Context, rgPath string, query string, files []sessions.SessionFile) (map[string][]int, error) {
+	rawHits := map[string]map[int]struct{}{}
+	for _, batch := range chunkSessionFiles(files) {
+		if err := runRipgrepBatch(ctx, rgPath, query, batch, rawHits); err != nil {
+			return nil, err
+		}
+	}
+	return compactRawHits(rawHits), nil
+}
+
+func runRipgrepBatch(ctx context.Context, rgPath string, query string, files []sessions.SessionFile, rawHits map[string]map[int]struct{}) error {
+	args := []string{"--json", "-F", "-i", "-n", "--no-messages", "-e", query}
+	for _, file := range files {
+		args = append(args, file.Path)
+	}
+
+	cmd := exec.CommandContext(ctx, rgPath, args...)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return err
+	}
+	cmd.Stderr = io.Discard
+
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+
+	parseErr := parseRipgrepMatches(stdout, rawHits)
+	waitErr := cmd.Wait()
+	if parseErr != nil {
+		return parseErr
+	}
+	if isNoMatchExit(waitErr) {
+		return nil
+	}
+	return waitErr
+}
+
+func parseRipgrepMatches(stdout io.Reader, rawHits map[string]map[int]struct{}) error {
+	type rgMessage struct {
+		Type string `json:"type"`
+		Data struct {
+			Path struct {
+				Text string `json:"text"`
+			} `json:"path"`
+			LineNumber int `json:"line_number"`
+		} `json:"data"`
+	}
+
+	reader := bufio.NewReader(stdout)
+	for {
+		line, err := reader.ReadBytes('\n')
+		if len(line) > 0 {
+			text := strings.TrimSpace(string(line))
+			if text != "" {
+				var message rgMessage
+				if unmarshalErr := json.Unmarshal([]byte(text), &message); unmarshalErr != nil {
+					return unmarshalErr
+				}
+				if message.Type == "match" && message.Data.LineNumber > 0 {
+					addRawHit(rawHits, filepath.Clean(message.Data.Path.Text), message.Data.LineNumber)
+				}
+			}
+		}
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+	}
+}
+
+func runGrep(ctx context.Context, grepPath string, query string, files []sessions.SessionFile) (map[string][]int, error) {
+	rawHits := map[string]map[int]struct{}{}
+	for _, batch := range chunkSessionFiles(files) {
+		if err := runGrepBatch(ctx, grepPath, query, batch, rawHits); err != nil {
+			return nil, err
+		}
+	}
+	return compactRawHits(rawHits), nil
+}
+
+func runGrepBatch(ctx context.Context, grepPath string, query string, files []sessions.SessionFile, rawHits map[string]map[int]struct{}) error {
+	args := []string{"-H", "-I", "-F", "-i", "-n", "--", query}
+	for _, file := range files {
+		args = append(args, file.Path)
+	}
+
+	cmd := exec.CommandContext(ctx, grepPath, args...)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return err
+	}
+	cmd.Stderr = io.Discard
+
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+
+	parseErr := parseGrepMatches(stdout, rawHits)
+	waitErr := cmd.Wait()
+	if parseErr != nil {
+		return parseErr
+	}
+	if isNoMatchExit(waitErr) {
+		return nil
+	}
+	return waitErr
+}
+
+func parseGrepMatches(stdout io.Reader, rawHits map[string]map[int]struct{}) error {
+	reader := bufio.NewReader(stdout)
+	for {
+		line, err := reader.ReadBytes('\n')
+		if len(line) > 0 {
+			path, lineNumber, ok := parseGrepLine(strings.TrimRight(string(line), "\r\n"))
+			if ok {
+				addRawHit(rawHits, filepath.Clean(path), lineNumber)
+			}
+		}
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+	}
+}
+
+func parseGrepLine(line string) (string, int, bool) {
+	firstColon := strings.IndexByte(line, ':')
+	if firstColon <= 0 {
+		return "", 0, false
+	}
+	secondColon := strings.IndexByte(line[firstColon+1:], ':')
+	if secondColon <= 0 {
+		return "", 0, false
+	}
+	secondColon += firstColon + 1
+	lineNumber, err := strconv.Atoi(line[firstColon+1 : secondColon])
+	if err != nil || lineNumber <= 0 {
+		return "", 0, false
+	}
+	return line[:firstColon], lineNumber, true
+}
+
+func scanFiles(ctx context.Context, query string, files []sessions.SessionFile) (map[string][]int, error) {
+	rawHits := map[string]map[int]struct{}{}
+	lowerQuery := strings.ToLower(query)
+	for _, file := range files {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		f, err := os.Open(file.Path)
+		if err != nil {
 			continue
 		}
-		preview := makePreview(item.content, q)
-		results = append(results, Result{
-			Date:              item.date,
-			Timestamp:         item.timestamp,
-			Cwd:               item.cwd,
-			Path:              item.path,
-			File:              item.file,
-			DisplayFile:       item.displayFile,
-			Line:              item.line,
-			Role:              item.role,
-			Preview:           preview,
-			PrevUser:          item.prevUser,
-			NextAssistant:     item.nextAsst,
-			PrevUserLine:      item.prevLine,
-			NextAssistantLine: item.nextLine,
-			sortTime:          item.sortTime,
-		})
-		if len(results) >= limit {
-			break
+		reader := bufio.NewReader(f)
+		lineNumber := 0
+		for {
+			line, err := reader.ReadBytes('\n')
+			if len(line) > 0 {
+				lineNumber++
+				text := strings.TrimRight(string(line), "\r\n")
+				if strings.Contains(strings.ToLower(text), lowerQuery) {
+					addRawHit(rawHits, file.Path, lineNumber)
+				}
+			}
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				_ = f.Close()
+				return nil, err
+			}
 		}
+		_ = f.Close()
 	}
-
-	return results
+	return compactRawHits(rawHits), nil
 }
 
-func pairKeyForEntry(item entry) (threadPairKey, bool) {
-	switch item.role {
-	case "user":
-		if item.nextLine <= 0 {
-			return threadPairKey{}, false
+func chunkSessionFiles(files []sessions.SessionFile) [][]sessions.SessionFile {
+	if len(files) == 0 {
+		return nil
+	}
+	batches := make([][]sessions.SessionFile, 0, (len(files)+searchBatchSize-1)/searchBatchSize)
+	for start := 0; start < len(files); start += searchBatchSize {
+		end := start + searchBatchSize
+		if end > len(files) {
+			end = len(files)
 		}
-		return threadPairKey{
-			path:          item.path,
-			file:          item.file,
-			userLine:      item.line,
-			assistantLine: item.nextLine,
-		}, true
-	case "assistant":
-		if item.prevLine <= 0 {
-			return threadPairKey{}, false
+		batches = append(batches, files[start:end])
+	}
+	return batches
+}
+
+func addRawHit(rawHits map[string]map[int]struct{}, path string, line int) {
+	if path == "" || line <= 0 {
+		return
+	}
+	lines := rawHits[path]
+	if lines == nil {
+		lines = map[int]struct{}{}
+		rawHits[path] = lines
+	}
+	lines[line] = struct{}{}
+}
+
+func compactRawHits(rawHits map[string]map[int]struct{}) map[string][]int {
+	out := make(map[string][]int, len(rawHits))
+	for path, lines := range rawHits {
+		values := make([]int, 0, len(lines))
+		for line := range lines {
+			values = append(values, line)
 		}
-		return threadPairKey{
-			path:          item.path,
-			file:          item.file,
-			userLine:      item.prevLine,
-			assistantLine: item.line,
-		}, true
-	default:
-		return threadPairKey{}, false
+		sort.Ints(values)
+		out[path] = values
 	}
+	return out
 }
 
-func shouldSkipAssistantDuplicate(item entry, pairStates map[threadPairKey]threadPairState) bool {
-	if item.role != "assistant" {
-		return false
-	}
-	key, ok := pairKeyForEntry(item)
-	if !ok {
-		return false
-	}
-	state, ok := pairStates[key]
-	if !ok {
-		return false
-	}
-	return state.hasUserHit && state.hasAssistantHit
+func newLineMatcher(lines []int) lineMatcher {
+	return lineMatcher{lines: lines}
 }
 
-func normalizeCwdFilter(value string) string {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return ""
-	}
-	if value != "/" && strings.HasSuffix(value, "/") {
-		value = strings.TrimRight(value, "/")
-	}
-	if value != "\\" && strings.HasSuffix(value, "\\") {
-		value = strings.TrimRight(value, "\\")
-	}
-	return value
-}
-
-func matchesCwdFilter(itemCwd string, cwdFilter string) bool {
-	if cwdFilter == "" {
-		return true
-	}
-	if itemCwd == "" {
+func (m lineMatcher) Matches(start, end int) bool {
+	if len(m.lines) == 0 {
 		return false
 	}
-	if itemCwd == cwdFilter {
-		return true
+	if start <= 0 {
+		start = 1
 	}
-	if cwdFilter == "/" {
-		return strings.HasPrefix(itemCwd, "/")
+	if end < start {
+		end = start
 	}
-	if cwdFilter == "\\" {
-		return strings.HasPrefix(itemCwd, "\\")
-	}
-	return strings.HasPrefix(itemCwd, cwdFilter+"/") || strings.HasPrefix(itemCwd, cwdFilter+"\\")
+	index := sort.SearchInts(m.lines, start)
+	return index < len(m.lines) && m.lines[index] <= end
 }
 
-func buildEntries(file sessions.SessionFile) ([]entry, error) {
+func buildEntries(file sessions.SessionFile, matcher lineMatcher) ([]entry, error) {
 	session, err := sessions.ParseSession(file.Path)
 	if err != nil {
 		return nil, err
@@ -353,6 +516,13 @@ func buildEntries(file sessions.SessionFile) ([]entry, error) {
 		if content == "" {
 			continue
 		}
+		endLine := item.EndLine
+		if endLine <= 0 {
+			endLine = item.Line
+		}
+		if !matcher.Matches(item.Line, endLine) {
+			continue
+		}
 		timestamp := parseTimestamp(item.Timestamp, file.ModTime)
 		entries = append(entries, entry{
 			date:        dateLabel,
@@ -365,7 +535,6 @@ func buildEntries(file sessions.SessionFile) ([]entry, error) {
 			line:        item.Line,
 			role:        item.Role,
 			content:     content,
-			lower:       strings.ToLower(content),
 			prevUser:    prevUser[i],
 			nextAsst:    nextAssistant[i],
 			prevLine:    prevUserLine[i],
@@ -373,6 +542,166 @@ func buildEntries(file sessions.SessionFile) ([]entry, error) {
 		})
 	}
 	return entries, nil
+}
+
+func buildPageFromEntries(matched []entry, query string, limit int, offset int) Page {
+	matched = filterEntriesByQuery(matched, query)
+	sort.SliceStable(matched, func(i, j int) bool {
+		if matched[i].sortTime.Equal(matched[j].sortTime) {
+			if matched[i].path == matched[j].path {
+				if matched[i].file == matched[j].file {
+					return matched[i].line < matched[j].line
+				}
+				return matched[i].file < matched[j].file
+			}
+			return matched[i].path < matched[j].path
+		}
+		return matched[i].sortTime.After(matched[j].sortTime)
+	})
+
+	pairStates := make(map[threadPairKey]threadPairState, len(matched))
+	for _, item := range matched {
+		if key, ok := pairKeyForEntry(item); ok {
+			state := pairStates[key]
+			switch item.role {
+			case "user":
+				state.hasUserHit = true
+			case "assistant":
+				state.hasAssistantHit = true
+			}
+			pairStates[key] = state
+		}
+	}
+
+	page := Page{
+		Results: make([]Result, 0, limit),
+		Offset:  offset,
+		Limit:   limit,
+	}
+	for _, item := range matched {
+		if shouldSkipAssistantDuplicate(item, pairStates) {
+			continue
+		}
+		if page.Total >= offset && len(page.Results) < limit {
+			page.Results = append(page.Results, Result{
+				Date:              item.date,
+				Timestamp:         item.timestamp,
+				Cwd:               item.cwd,
+				Path:              item.path,
+				File:              item.file,
+				DisplayFile:       item.displayFile,
+				Line:              item.line,
+				Role:              item.role,
+				Preview:           makePreview(item.content, query),
+				PrevUser:          item.prevUser,
+				NextAssistant:     item.nextAsst,
+				PrevUserLine:      item.prevLine,
+				NextAssistantLine: item.nextLine,
+				sortTime:          item.sortTime,
+			})
+		}
+		page.Total++
+	}
+	return page
+}
+
+func filterEntriesByQuery(entries []entry, query string) []entry {
+	lowerQuery := strings.ToLower(strings.TrimSpace(query))
+	if lowerQuery == "" {
+		return entries
+	}
+	filtered := entries[:0]
+	for _, item := range entries {
+		if strings.Contains(strings.ToLower(item.content), lowerQuery) {
+			filtered = append(filtered, item)
+		}
+	}
+	return filtered
+}
+
+func pairKeyForEntry(item entry) (threadPairKey, bool) {
+	switch item.role {
+	case "user":
+		if item.nextLine <= 0 {
+			return threadPairKey{}, false
+		}
+		return threadPairKey{
+			path:          item.path,
+			file:          item.file,
+			userLine:      item.line,
+			assistantLine: item.nextLine,
+		}, true
+	case "assistant":
+		if item.prevLine <= 0 {
+			return threadPairKey{}, false
+		}
+		return threadPairKey{
+			path:          item.path,
+			file:          item.file,
+			userLine:      item.prevLine,
+			assistantLine: item.line,
+		}, true
+	default:
+		return threadPairKey{}, false
+	}
+}
+
+func shouldSkipAssistantDuplicate(item entry, pairStates map[threadPairKey]threadPairState) bool {
+	if item.role != "assistant" {
+		return false
+	}
+	key, ok := pairKeyForEntry(item)
+	if !ok {
+		return false
+	}
+	state, ok := pairStates[key]
+	if !ok {
+		return false
+	}
+	return state.hasUserHit && state.hasAssistantHit
+}
+
+func normalizeLimit(limit int) int {
+	if limit <= 0 {
+		return defaultLimit
+	}
+	if limit > maxLimit {
+		return maxLimit
+	}
+	return limit
+}
+
+func normalizeCwdFilter(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	if value != "/" && strings.HasSuffix(value, "/") {
+		value = strings.TrimRight(value, "/")
+	}
+	if value != "\\" && strings.HasSuffix(value, "\\") {
+		value = strings.TrimRight(value, "\\")
+	}
+	return value
+}
+
+func matchesCwdFilter(itemCwd string, cwdFilter string) bool {
+	if cwdFilter == "" {
+		return true
+	}
+	if itemCwd == "" {
+		return false
+	}
+	if itemCwd == cwdFilter {
+		return true
+	}
+	if cwdFilter == "/" {
+		return strings.HasPrefix(itemCwd, "/")
+	}
+	if cwdFilter == "\\" {
+		return strings.HasPrefix(itemCwd, "\\")
+	}
+	return strings.HasPrefix(itemCwd, cwdFilter+"/") || strings.HasPrefix(itemCwd, cwdFilter+"\\")
 }
 
 func makePreview(content string, query string) string {
@@ -474,4 +803,23 @@ func formatTimestamp(ts time.Time) string {
 		return ""
 	}
 	return ts.Format("2006-01-02 15:04:05")
+}
+
+func lookupSearchBinary(name string) string {
+	path, err := exec.LookPath(name)
+	if err != nil {
+		return ""
+	}
+	return path
+}
+
+func isNoMatchExit(err error) bool {
+	if err == nil {
+		return false
+	}
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) {
+		return false
+	}
+	return exitErr.ExitCode() == 1
 }

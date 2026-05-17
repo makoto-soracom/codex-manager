@@ -520,6 +520,185 @@ func TestSessionTemplateShowsSingleToolRunGroupHeader(t *testing.T) {
 	}
 }
 
+func TestSessionTemplateShowsToolRunTokenUsageNearOutputAndGroupTotal(t *testing.T) {
+	sessionsDir := t.TempDir()
+	datePath := filepath.Join(sessionsDir, "2026", "03", "18")
+	if err := os.MkdirAll(datePath, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	sessionPath := filepath.Join(datePath, "tool-run-token-usage.jsonl")
+	sessionData := "" +
+		"{\"timestamp\":\"2026-03-18T00:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"session-token-usage\",\"timestamp\":\"2026-03-18T00:00:00Z\",\"cwd\":\"/tmp\",\"originator\":\"cli\",\"cli_version\":\"0.1\"}}\n" +
+		"{\"timestamp\":\"2026-03-18T00:00:01Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"function_call\",\"name\":\"exec_command\",\"arguments\":\"{\\\"cmd\\\":\\\"pwd\\\",\\\"workdir\\\":\\\"/tmp/project\\\"}\",\"call_id\":\"call_a\"}}\n" +
+		"{\"timestamp\":\"2026-03-18T00:00:02Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"total_token_usage\":{\"input_tokens\":35041630,\"cached_input_tokens\":34567808,\"output_tokens\":27818,\"reasoning_output_tokens\":11254,\"total_tokens\":35069448},\"last_token_usage\":{\"input_tokens\":225839,\"cached_input_tokens\":225664,\"output_tokens\":37,\"reasoning_output_tokens\":0,\"total_tokens\":225876},\"model_context_window\":258400},\"rate_limits\":{\"limit_id\":\"codex\",\"limit_name\":null,\"primary\":null,\"secondary\":null,\"credits\":null,\"plan_type\":\"team\",\"rate_limit_reached_type\":null}}}\n" +
+		"{\"timestamp\":\"2026-03-18T00:00:03Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"function_call_output\",\"call_id\":\"call_a\",\"output\":\"/tmp/project\"}}\n"
+	if err := os.WriteFile(sessionPath, []byte(sessionData), 0o600); err != nil {
+		t.Fatalf("write session: %v", err)
+	}
+
+	idx := sessions.NewIndex(sessionsDir)
+	if err := idx.Refresh(); err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+
+	renderer, err := render.New()
+	if err != nil {
+		t.Fatalf("renderer: %v", err)
+	}
+
+	server := NewServer(idx, nil, renderer, sessionsDir, "", "", 3)
+	view, err := server.buildSessionView([]string{"2026", "03", "18", "tool-run-token-usage.jsonl"})
+	if err != nil {
+		t.Fatalf("buildSessionView: %v", err)
+	}
+	if len(view.Items) != 1 {
+		t.Fatalf("expected token usage to be folded into one grouped item, got %d items: %#v", len(view.Items), view.Items)
+	}
+	wantUsage := "input=175, cached=225,664, output=37 (reasoning=0), total=225,876"
+	if view.Items[0].ToolRunUsage != wantUsage {
+		t.Fatalf("expected output token usage %q, got %q", wantUsage, view.Items[0].ToolRunUsage)
+	}
+	if view.Items[0].ToolRunGroupUsage != wantUsage {
+		t.Fatalf("expected grouped token usage %q, got %q", wantUsage, view.Items[0].ToolRunGroupUsage)
+	}
+
+	var buf bytes.Buffer
+	if err := renderer.Execute(&buf, "session", view); err != nil {
+		t.Fatalf("render session: %v", err)
+	}
+	html := buf.String()
+	if !strings.Contains(html, "Tool run 1") || !strings.Contains(html, "Lines 2-4") || !strings.Contains(html, wantUsage) {
+		t.Fatalf("expected grouped and output token usage, got %s", html)
+	}
+	if strings.Contains(html, "Token usage") {
+		t.Fatalf("expected no standalone token usage block, got %s", html)
+	}
+}
+
+func TestSessionTemplateShowsSharedToolRunTokenUsageOnce(t *testing.T) {
+	sessionsDir := t.TempDir()
+	datePath := filepath.Join(sessionsDir, "2026", "03", "18")
+	if err := os.MkdirAll(datePath, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	sessionPath := filepath.Join(datePath, "tool-run-shared-token-usage.jsonl")
+	sessionData := "" +
+		"{\"timestamp\":\"2026-03-18T00:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"session-shared-token-usage\",\"timestamp\":\"2026-03-18T00:00:00Z\",\"cwd\":\"/tmp\",\"originator\":\"cli\",\"cli_version\":\"0.1\"}}\n" +
+		"{\"timestamp\":\"2026-03-18T00:00:01Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"function_call\",\"name\":\"exec_command\",\"arguments\":\"{\\\"cmd\\\":\\\"one\\\"}\",\"call_id\":\"call_a\"}}\n" +
+		"{\"timestamp\":\"2026-03-18T00:00:02Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"function_call\",\"name\":\"exec_command\",\"arguments\":\"{\\\"cmd\\\":\\\"two\\\"}\",\"call_id\":\"call_b\"}}\n" +
+		"{\"timestamp\":\"2026-03-18T00:00:03Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"function_call\",\"name\":\"exec_command\",\"arguments\":\"{\\\"cmd\\\":\\\"three\\\"}\",\"call_id\":\"call_c\"}}\n" +
+		"{\"timestamp\":\"2026-03-18T00:00:04Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"function_call\",\"name\":\"exec_command\",\"arguments\":\"{\\\"cmd\\\":\\\"four\\\"}\",\"call_id\":\"call_d\"}}\n" +
+		"{\"timestamp\":\"2026-03-18T00:00:05Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"total_token_usage\":{\"input_tokens\":565060,\"cached_input_tokens\":451072,\"output_tokens\":4097,\"reasoning_output_tokens\":1658,\"total_tokens\":569157},\"last_token_usage\":{\"input_tokens\":94650,\"cached_input_tokens\":91520,\"output_tokens\":449,\"reasoning_output_tokens\":56,\"total_tokens\":95099},\"model_context_window\":258400},\"rate_limits\":{\"limit_id\":\"codex\",\"limit_name\":null,\"primary\":null,\"secondary\":null,\"credits\":null,\"plan_type\":\"team\",\"rate_limit_reached_type\":null}}}\n" +
+		"{\"timestamp\":\"2026-03-18T00:00:06Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"function_call_output\",\"call_id\":\"call_a\",\"output\":\"one\"}}\n" +
+		"{\"timestamp\":\"2026-03-18T00:00:07Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"function_call_output\",\"call_id\":\"call_b\",\"output\":\"two\"}}\n" +
+		"{\"timestamp\":\"2026-03-18T00:00:08Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"function_call_output\",\"call_id\":\"call_c\",\"output\":\"three\"}}\n" +
+		"{\"timestamp\":\"2026-03-18T00:00:09Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"function_call_output\",\"call_id\":\"call_d\",\"output\":\"four\"}}\n"
+	if err := os.WriteFile(sessionPath, []byte(sessionData), 0o600); err != nil {
+		t.Fatalf("write session: %v", err)
+	}
+
+	idx := sessions.NewIndex(sessionsDir)
+	if err := idx.Refresh(); err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+
+	renderer, err := render.New()
+	if err != nil {
+		t.Fatalf("renderer: %v", err)
+	}
+
+	server := NewServer(idx, nil, renderer, sessionsDir, "", "", 3)
+	view, err := server.buildSessionView([]string{"2026", "03", "18", "tool-run-shared-token-usage.jsonl"})
+	if err != nil {
+		t.Fatalf("buildSessionView: %v", err)
+	}
+	if len(view.Items) != 4 {
+		t.Fatalf("expected four grouped tool run items, got %d items: %#v", len(view.Items), view.Items)
+	}
+	wantUsage := "input=3,130, cached=91,520, output=449 (reasoning=56), total=95,099"
+	if view.Items[0].ToolRunUsage != wantUsage {
+		t.Fatalf("expected output token usage %q, got %q", wantUsage, view.Items[0].ToolRunUsage)
+	}
+	if view.Items[0].ToolRunGroupUsage != wantUsage {
+		t.Fatalf("expected grouped token usage %q, got %q", wantUsage, view.Items[0].ToolRunGroupUsage)
+	}
+	for index, item := range view.Items[1:] {
+		if item.ToolRunUsage != "" {
+			t.Fatalf("expected shared token usage to be attached only once, item %d has %q", index+1, item.ToolRunUsage)
+		}
+	}
+
+	var buf bytes.Buffer
+	if err := renderer.Execute(&buf, "session", view); err != nil {
+		t.Fatalf("render session: %v", err)
+	}
+	html := buf.String()
+	if count := strings.Count(html, wantUsage); count != 2 {
+		t.Fatalf("expected shared token usage in group header and one output, got %d html=%s", count, html)
+	}
+}
+
+func TestSessionTemplateFoldsFinalAnswerUsageAndShowsTaskSummary(t *testing.T) {
+	sessionsDir := t.TempDir()
+	datePath := filepath.Join(sessionsDir, "2026", "03", "18")
+	if err := os.MkdirAll(datePath, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	sessionPath := filepath.Join(datePath, "final-answer-token-usage.jsonl")
+	sessionData := "" +
+		"{\"timestamp\":\"2026-03-18T00:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"session-final-usage\",\"timestamp\":\"2026-03-18T00:00:00Z\",\"cwd\":\"/tmp\",\"originator\":\"cli\",\"cli_version\":\"0.1\"}}\n" +
+		"{\"timestamp\":\"2026-03-18T00:00:01Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"total_token_usage\":{\"input_tokens\":1000,\"cached_input_tokens\":512,\"output_tokens\":10,\"reasoning_output_tokens\":0,\"total_tokens\":1010},\"last_token_usage\":{\"input_tokens\":1000,\"cached_input_tokens\":512,\"output_tokens\":10,\"reasoning_output_tokens\":0,\"total_tokens\":1010},\"model_context_window\":258400},\"rate_limits\":{\"limit_id\":\"codex\",\"plan_type\":\"team\"}}}\n" +
+		"{\"timestamp\":\"2026-03-18T00:00:02Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\"}}\n" +
+		"{\"timestamp\":\"2026-03-18T00:00:03Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[{\"type\":\"output_text\",\"text\":\"done\"}]}}\n" +
+		"{\"timestamp\":\"2026-03-18T00:00:04Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"total_token_usage\":{\"input_tokens\":2200,\"cached_input_tokens\":1536,\"output_tokens\":50,\"reasoning_output_tokens\":0,\"total_tokens\":2250},\"last_token_usage\":{\"input_tokens\":1200,\"cached_input_tokens\":1024,\"output_tokens\":40,\"reasoning_output_tokens\":0,\"total_tokens\":1240},\"model_context_window\":258400},\"rate_limits\":{\"limit_id\":\"codex\",\"plan_type\":\"team\"}}}\n" +
+		"{\"timestamp\":\"2026-03-18T00:00:05Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"task_complete\",\"duration_ms\":102675}}\n"
+	if err := os.WriteFile(sessionPath, []byte(sessionData), 0o600); err != nil {
+		t.Fatalf("write session: %v", err)
+	}
+
+	idx := sessions.NewIndex(sessionsDir)
+	if err := idx.Refresh(); err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+
+	renderer, err := render.New()
+	if err != nil {
+		t.Fatalf("renderer: %v", err)
+	}
+
+	server := NewServer(idx, nil, renderer, sessionsDir, "", "", 3)
+	view, err := server.buildSessionView([]string{"2026", "03", "18", "final-answer-token-usage.jsonl"})
+	if err != nil {
+		t.Fatalf("buildSessionView: %v", err)
+	}
+	if len(view.Items) != 3 {
+		t.Fatalf("expected baseline token, assistant message, and task summary, got %d items: %#v", len(view.Items), view.Items)
+	}
+	wantUsage := "input=176, cached=1,024, output=40 (reasoning=0), total=1,240"
+	if view.Items[1].ResponseUsage != wantUsage {
+		t.Fatalf("expected final answer usage %q, got %q", wantUsage, view.Items[1].ResponseUsage)
+	}
+	wantSummary := "Worked for 1m 42s (" + wantUsage + ")"
+	if view.Items[2].Subtype != "task_complete" || view.Items[2].Content != wantSummary {
+		t.Fatalf("expected task summary %q, got %#v", wantSummary, view.Items[2])
+	}
+
+	var buf bytes.Buffer
+	if err := renderer.Execute(&buf, "session", view); err != nil {
+		t.Fatalf("render session: %v", err)
+	}
+	html := buf.String()
+	if !strings.Contains(html, `class="meta response-usage"`) || !strings.Contains(html, wantUsage) || !strings.Contains(html, wantSummary) {
+		t.Fatalf("expected final answer usage and task summary in html, got %s", html)
+	}
+	if strings.Contains(html, "Line 5") {
+		t.Fatalf("expected folded token_count line to be hidden, got %s", html)
+	}
+}
+
 func TestHandleSessionMarkdownReturnsThreadAndGroupedLineMarkdown(t *testing.T) {
 	sessionsDir := t.TempDir()
 	datePath := filepath.Join(sessionsDir, "2026", "03", "18")

@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"codex-manager/internal/sessions"
@@ -23,6 +24,7 @@ func TestIndexSearch(t *testing.T) {
 	}
 
 	searchIdx := NewIndex()
+	forceFallbackSearch(t, searchIdx)
 	if err := searchIdx.RefreshFrom(idx); err != nil {
 		t.Fatalf("search refresh: %v", err)
 	}
@@ -77,6 +79,7 @@ func TestSearchDeduplicatesConsecutiveUserAssistantHits(t *testing.T) {
 	}
 
 	searchIdx := NewIndex()
+	forceFallbackSearch(t, searchIdx)
 	if err := searchIdx.RefreshFrom(idx); err != nil {
 		t.Fatalf("search refresh: %v", err)
 	}
@@ -109,6 +112,7 @@ func TestSearchKeepsAssistantOnlyHit(t *testing.T) {
 	}
 
 	searchIdx := NewIndex()
+	forceFallbackSearch(t, searchIdx)
 	if err := searchIdx.RefreshFrom(idx); err != nil {
 		t.Fatalf("search refresh: %v", err)
 	}
@@ -144,6 +148,7 @@ func TestSearchIncludesDisplayFile(t *testing.T) {
 	}
 
 	searchIdx := NewIndex()
+	forceFallbackSearch(t, searchIdx)
 	if err := searchIdx.RefreshFrom(idx); err != nil {
 		t.Fatalf("search refresh: %v", err)
 	}
@@ -177,6 +182,73 @@ func TestSearchIncludesDisplayFile(t *testing.T) {
 	}
 }
 
+func TestSearchIgnoresRawMetadataOnlyHits(t *testing.T) {
+	baseDir := t.TempDir()
+	writeSessionFile(t, baseDir, "2024/01/02/session.jsonl", []string{
+		`{"timestamp":"2024-01-02T00:00:01Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"text","text":"visible content"}]}}`,
+	})
+
+	idx := sessions.NewIndex(baseDir)
+	if err := idx.Refresh(); err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+
+	searchIdx := NewIndex()
+	forceFallbackSearch(t, searchIdx)
+	if err := searchIdx.RefreshFrom(idx); err != nil {
+		t.Fatalf("search refresh: %v", err)
+	}
+
+	results := searchIdx.Search("response_item", 10)
+	if len(results) != 0 {
+		t.Fatalf("expected raw metadata-only hit to be filtered, got %#v", results)
+	}
+}
+
+func TestSearchReturnsMostRecentMatchFirst(t *testing.T) {
+	baseDir := t.TempDir()
+	olderPath := filepath.Join(baseDir, filepath.FromSlash("2024/01/02/older.jsonl"))
+	newerPath := filepath.Join(baseDir, filepath.FromSlash("2024/01/02/newer.jsonl"))
+
+	writeSessionFile(t, baseDir, "2024/01/02/older.jsonl", []string{
+		`{"timestamp":"2024-01-02T00:00:01Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"text","text":"needle older"}]}}`,
+	})
+	writeSessionFile(t, baseDir, "2024/01/02/newer.jsonl", []string{
+		`{"timestamp":"2024-01-02T00:00:03Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"text","text":"needle newer"}]}}`,
+	})
+
+	laterModTime := time.Date(2024, 1, 2, 12, 0, 0, 0, time.UTC)
+	earlierModTime := time.Date(2024, 1, 2, 11, 0, 0, 0, time.UTC)
+	if err := os.Chtimes(olderPath, laterModTime, laterModTime); err != nil {
+		t.Fatalf("chtimes older: %v", err)
+	}
+	if err := os.Chtimes(newerPath, earlierModTime, earlierModTime); err != nil {
+		t.Fatalf("chtimes newer: %v", err)
+	}
+
+	idx := sessions.NewIndex(baseDir)
+	if err := idx.Refresh(); err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+
+	searchIdx := NewIndex()
+	forceFallbackSearch(t, searchIdx)
+	if err := searchIdx.RefreshFrom(idx); err != nil {
+		t.Fatalf("search refresh: %v", err)
+	}
+
+	results := searchIdx.Search("needle", 10)
+	if len(results) != 2 {
+		t.Fatalf("expected 2 results, got %d", len(results))
+	}
+	if results[0].File != "newer.jsonl" {
+		t.Fatalf("expected newer.jsonl first, got %q", results[0].File)
+	}
+	if results[1].File != "older.jsonl" {
+		t.Fatalf("expected older.jsonl second, got %q", results[1].File)
+	}
+}
+
 func TestMakePreviewMultibyteBoundarySafe(t *testing.T) {
 	content := strings.Repeat("あ", 120) + "キーワード" + strings.Repeat("い", 120)
 	preview := makePreview(content, "キーワード")
@@ -195,6 +267,74 @@ func TestMakePreviewMultibyteBoundarySafe(t *testing.T) {
 	}
 }
 
+func TestSearchPageWithOffset(t *testing.T) {
+	baseDir := t.TempDir()
+	writeSessionFile(t, baseDir, "2024/01/02/a.jsonl", []string{
+		`{"timestamp":"2024-01-02T00:00:01Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"text","text":"needle first"}]}}`,
+	})
+	writeSessionFile(t, baseDir, "2024/01/02/b.jsonl", []string{
+		`{"timestamp":"2024-01-02T00:00:03Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"text","text":"needle third"}]}}`,
+	})
+	writeSessionFile(t, baseDir, "2024/01/02/c.jsonl", []string{
+		`{"timestamp":"2024-01-02T00:00:02Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"text","text":"needle second"}]}}`,
+	})
+
+	idx := sessions.NewIndex(baseDir)
+	if err := idx.Refresh(); err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+
+	searchIdx := NewIndex()
+	forceFallbackSearch(t, searchIdx)
+	if err := searchIdx.RefreshFrom(idx); err != nil {
+		t.Fatalf("search refresh: %v", err)
+	}
+
+	page, err := searchIdx.SearchPageWithCwdContext(t.Context(), "needle", 1, 1, "")
+	if err != nil {
+		t.Fatalf("search page: %v", err)
+	}
+	if page.Total != 3 {
+		t.Fatalf("expected total 3, got %d", page.Total)
+	}
+	if len(page.Results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(page.Results))
+	}
+	if page.Results[0].Preview != "needle second" {
+		t.Fatalf("expected second result, got %q", page.Results[0].Preview)
+	}
+}
+
+func TestSearchMatchesMergedAssistantLineRanges(t *testing.T) {
+	baseDir := t.TempDir()
+	writeSessionFile(t, baseDir, "2024/01/02/merged.jsonl", []string{
+		`{"timestamp":"2024-01-02T00:00:01Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"text","text":"first assistant line"}]}}`,
+		`{"timestamp":"2024-01-02T00:00:02Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"text","text":"needle second assistant line"}]}}`,
+	})
+
+	idx := sessions.NewIndex(baseDir)
+	if err := idx.Refresh(); err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+
+	searchIdx := NewIndex()
+	forceFallbackSearch(t, searchIdx)
+	if err := searchIdx.RefreshFrom(idx); err != nil {
+		t.Fatalf("search refresh: %v", err)
+	}
+
+	results := searchIdx.Search("needle", 10)
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	if results[0].Line != 1 {
+		t.Fatalf("expected merged assistant line 1, got %d", results[0].Line)
+	}
+	if !strings.Contains(results[0].Preview, "needle") {
+		t.Fatalf("expected preview to contain needle, got %q", results[0].Preview)
+	}
+}
+
 func writeSessionFile(t *testing.T, baseDir, relPath string, lines []string) {
 	t.Helper()
 	fullPath := filepath.Join(baseDir, filepath.FromSlash(relPath))
@@ -205,4 +345,10 @@ func writeSessionFile(t *testing.T, baseDir, relPath string, lines []string) {
 	if err := os.WriteFile(fullPath, []byte(payload), 0o600); err != nil {
 		t.Fatalf("write file: %v", err)
 	}
+}
+
+func forceFallbackSearch(t *testing.T, idx *Index) {
+	t.Helper()
+	idx.rgPath = ""
+	idx.grepPath = ""
 }

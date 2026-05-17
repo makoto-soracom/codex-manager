@@ -89,9 +89,15 @@
         <summary class="session-group-header">
           <span class="session-group-title">{{ .ToolRunGroupTitle }}</span>
           <span class="meta">Lines {{ .Line }}-{{ .ToolRunGroupLastLine }}</span>
+          {{ if .ToolRunGroupUsage }}<span class="meta tool-run-usage">{{ .ToolRunGroupUsage }}</span>{{ end }}
         </summary>
         <div class="session-group-body">
       {{ end }}
+      {{ if eq .Subtype "task_complete" }}
+      <section id="line-{{ .Line }}" class="session-task-summary">
+        <span class="session-task-summary-text">{{ .Content }}</span>
+      </section>
+      {{ else }}
       <section id="line-{{ .Line }}" class="{{ if .IsTurnAborted }}turn-aborted-item{{ else }}session-item {{ .Class }}{{ end }}">
         {{ if eq .Line $.LastUserLine }}<span id="last-user" class="session-anchor"></span>{{ end }}
         {{ if eq .Line $.LastAgentLine }}<span id="last-agent" class="session-anchor"></span>{{ end }}
@@ -112,6 +118,7 @@
           {{ if .SubagentID }}<span class="meta subagent-id">{{ .SubagentID }}</span>{{ end }}
           {{ if .SubagentSessionPath }}<a class="nav-btn subagent-link" href="{{ .SubagentSessionPath }}" target="_blank" rel="noopener noreferrer" title="{{ .SubagentSessionTitle }}">Open subagent thread</a>{{ end }}
           {{ if .ToolRunOutputLine }}<span class="meta">Lines {{ .Line }} / {{ .ToolRunOutputLine }}</span>{{ else }}<span class="meta">Line {{ .Line }}</span>{{ end }}
+          {{ if .ResponseUsage }}<span class="meta response-usage">{{ .ResponseUsage }}</span>{{ end }}
           <button class="copy-btn" type="button" data-copy-url="/markdown/{{ $.Date.Path }}/{{ $.File.Name }}?line={{ .Line }}" aria-label="Copy Markdown" title="Copy Markdown">📋</button><button class="copy-btn" type="button" data-copy-link="line-{{ .Line }}" aria-label="Copy Link" title="Copy Link">🔗</button>
         </div>
         {{ end }}
@@ -123,7 +130,7 @@
         <div class="tool-run-part tool-run-part-output">
           <span id="line-{{ .ToolRunOutputLine }}" class="session-anchor"></span>
           {{ if and (eq $.LastUserLine 0) (eq .ToolRunOutputLine $.LastItemLine) }}<span id="last-item" class="session-anchor"></span>{{ end }}
-          <p class="meta tool-run-part-meta"><span class="tag tag-tool-run-output">Tool output</span> {{ .ToolRunOutputTitle }} | {{ .ToolRunOutputTime }} | Line {{ .ToolRunOutputLine }}</p>
+          <p class="meta tool-run-part-meta"><span class="tag tag-tool-run-output">Tool output</span> {{ .ToolRunOutputTitle }} | {{ .ToolRunOutputTime }} | Line {{ .ToolRunOutputLine }}{{ if .ToolRunUsage }} | <span class="tool-run-usage">{{ .ToolRunUsage }}</span>{{ end }}</p>
           <details class="tool-output-details">
             <summary class="meta tool-output-summary">Reveal output</summary>
             <div class="session-content markdown">{{ .ToolRunOutputHTML }}</div>
@@ -155,6 +162,7 @@
         {{ end }}
         {{ end }}
       </section>
+      {{ end }}
       {{ if .ToolRunGroupEnd }}
         </div>
       </details>

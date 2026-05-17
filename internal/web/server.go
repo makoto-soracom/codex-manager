@@ -60,6 +60,7 @@ type Server struct {
 	htmlBucket          htmlBucketUploader
 	activeRefreshMaxAge time.Duration
 	activeRefreshMu     sync.Mutex
+	activeWarmOnce      sync.Once
 }
 
 // NewServer wires up the HTTP server.
@@ -94,6 +95,21 @@ func (s *Server) EnableActive(activeIdx *active.Index, state *active.StateStore,
 	if refreshMaxAge > 0 {
 		s.activeRefreshMaxAge = refreshMaxAge
 	}
+}
+
+// WarmActiveAsync triggers a one-time background refresh so the first UI request
+// does not have to pay the full active index initialization cost.
+func (s *Server) WarmActiveAsync() {
+	if s.active == nil || s.idx == nil {
+		return
+	}
+	s.activeWarmOnce.Do(func() {
+		go func() {
+			if err := s.refreshActiveIfStale(); err != nil {
+				log.Printf("initial active warm-up failed: %v", err)
+			}
+		}()
+	})
 }
 
 // EnableNotifications configures the webhook notification log.
@@ -371,11 +387,16 @@ type itemView struct {
 	Markdown             string
 	SubagentRequestHTML  template.HTML
 	HTML                 template.HTML
+	ResponseUsage        string
 	ToolRunCallTitle     string
 	ToolRunOutputLine    int
 	ToolRunOutputTitle   string
 	ToolRunOutputHTML    template.HTML
 	ToolRunOutputTime    string
+	ToolRunUsage         string
+	ToolRunUsageTotal    int
+	ToolRunUsageDisplay  sessions.TokenUsageDisplay
+	ToolRunGroupUsage    string
 	ToolRunGroupTitle    string
 	ToolRunGroupCount    int
 	ToolRunGroupLastLine int
@@ -745,6 +766,9 @@ func (s *Server) handleSessionMarkdown(w http.ResponseWriter, r *http.Request, p
 type searchResponse struct {
 	Query   string          `json:"query"`
 	Results []search.Result `json:"results"`
+	Offset  int             `json:"offset"`
+	Limit   int             `json:"limit"`
+	Total   int             `json:"total"`
 }
 
 func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
@@ -768,16 +792,34 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	if limit > 200 {
 		limit = 200
 	}
+	offset := 0
+	if rawOffset := r.URL.Query().Get("offset"); rawOffset != "" {
+		if parsed, err := strconv.Atoi(rawOffset); err == nil && parsed > 0 {
+			offset = parsed
+		}
+	}
 
-	var results []search.Result
+	page := search.Page{Offset: offset, Limit: limit}
 	if len(query) >= 2 {
-		results = s.search.SearchWithCwd(query, limit, cwdFilter)
-	} else {
-		results = []search.Result{}
+		var err error
+		page, err = s.search.SearchPageWithCwdContext(r.Context(), query, limit, offset, cwdFilter)
+		if err != nil {
+			if errors.Is(err, context.Canceled) {
+				return
+			}
+			http.Error(w, "search failed", http.StatusInternalServerError)
+			return
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(searchResponse{Query: query, Results: results})
+	_ = json.NewEncoder(w).Encode(searchResponse{
+		Query:   query,
+		Results: page.Results,
+		Offset:  page.Offset,
+		Limit:   page.Limit,
+		Total:   page.Total,
+	})
 }
 
 func (s *Server) handleShare(w http.ResponseWriter, r *http.Request, parts []string) {
@@ -1944,6 +1986,7 @@ func (s *Server) buildSessionView(parts []string) (sessionPageView, error) {
 
 	toolRunOutputs := findToolRunOutputs(session.Items)
 	groupedOutputIndexes := make(map[int]struct{}, len(toolRunOutputs))
+	groupedTokenUsageIndexes := make(map[int]struct{})
 	items := make([]itemView, 0, len(session.Items))
 	lastUserLine := 0
 	lastAnyUserLine := 0
@@ -1974,17 +2017,22 @@ func (s *Server) buildSessionView(parts []string) (sessionPageView, error) {
 			userNavLabel = "agent"
 		}
 	}
+	sessionCwd := sessions.CwdForFile(file)
 	for index := 0; index < len(session.Items); index++ {
 		if _, grouped := groupedOutputIndexes[index]; grouped {
+			continue
+		}
+		if _, grouped := groupedTokenUsageIndexes[index]; grouped {
 			continue
 		}
 
 		item := session.Items[index]
 		if outputIndex, ok := toolRunOutputs[index]; ok {
-			callView := s.buildSessionItemView(item, isSubagentThread, subagentDisplayName, subagentDisplayRole)
+			callView := s.buildSessionItemView(item, sessionCwd, isSubagentThread, subagentDisplayName, subagentDisplayRole)
 			outputItem := session.Items[outputIndex]
-			outputView := s.buildSessionItemView(outputItem, isSubagentThread, subagentDisplayName, subagentDisplayRole)
-			grouped := buildToolRunView(item, callView, outputItem, outputView)
+			outputView := s.buildSessionItemView(outputItem, sessionCwd, isSubagentThread, subagentDisplayName, subagentDisplayRole)
+			tokenUsage := toolRunTokenUsage(session.Items, index, outputIndex, groupedTokenUsageIndexes)
+			grouped := buildToolRunView(item, callView, outputItem, outputView, tokenUsage)
 			groupedOutputIndexes[outputIndex] = struct{}{}
 			if outputItem.Line > lastItemLine {
 				lastItemLine = outputItem.Line
@@ -1993,7 +2041,12 @@ func (s *Server) buildSessionView(parts []string) (sessionPageView, error) {
 			continue
 		}
 
-		view := s.buildSessionItemView(item, isSubagentThread, subagentDisplayName, subagentDisplayRole)
+		if isTokenUsageItem(item) && item.TokenUsage != nil && len(items) > 0 && canAttachResponseUsage(items[len(items)-1]) {
+			items[len(items)-1].ResponseUsage = item.TokenUsage.Format(false)
+			continue
+		}
+
+		view := s.buildSessionItemView(item, sessionCwd, isSubagentThread, subagentDisplayName, subagentDisplayRole)
 		autoCtx := view.AutoCtx
 		isSubagentNotification := item.SubagentID != ""
 		if item.Role == "user" {
@@ -2031,9 +2084,9 @@ func (s *Server) buildSessionView(parts []string) (sessionPageView, error) {
 			Size:        formatBytes(file.Size),
 			ModTime:     formatTime(file.ModTime),
 			ModTimeOnly: formatTimeOnly(file.ModTime),
-			Cwd:         displayCwd(sessions.CwdForFile(file)),
+			Cwd:         displayCwd(sessionCwd),
 			Branch:      branchForMeta(file.Meta),
-			BranchURL:   s.branchURLForMeta(file.Meta, sessions.CwdForFile(file)),
+			BranchURL:   s.branchURLForMeta(file.Meta, sessionCwd),
 			DateLabel:   date.String(),
 			DatePath:    date.Path(),
 		},
@@ -2115,7 +2168,53 @@ func isToolRunOutput(item sessions.RenderItem) bool {
 	}
 }
 
-func (s *Server) buildSessionItemView(item sessions.RenderItem, isSubagentThread bool, subagentDisplayName, subagentDisplayRole string) itemView {
+func isTokenUsageItem(item sessions.RenderItem) bool {
+	return item.Type == "event_msg" && item.Subtype == "token_count"
+}
+
+func canAttachResponseUsage(item itemView) bool {
+	return item.Role == "assistant" && item.Subtype == "message" && item.ToolRunOutputLine == 0
+}
+
+type toolRunUsageSummary struct {
+	Text        string
+	TotalTokens int
+	Usage       sessions.TokenUsageDisplay
+}
+
+func toolRunTokenUsage(items []sessions.RenderItem, callIndex, outputIndex int, grouped map[int]struct{}) toolRunUsageSummary {
+	if outputIndex <= callIndex+1 {
+		return toolRunUsageSummary{}
+	}
+
+	var usage sessions.TokenUsageDisplay
+	hasUsage := false
+	for index := callIndex + 1; index < outputIndex; index++ {
+		if _, ok := grouped[index]; ok {
+			continue
+		}
+		item := items[index]
+		if !isTokenUsageItem(item) {
+			continue
+		}
+		grouped[index] = struct{}{}
+		if item.TokenUsage == nil {
+			continue
+		}
+		usage = usage.Add(*item.TokenUsage)
+		hasUsage = true
+	}
+	if !hasUsage {
+		return toolRunUsageSummary{}
+	}
+	return toolRunUsageSummary{
+		Text:        usage.Format(false),
+		TotalTokens: usage.TotalTokens,
+		Usage:       usage,
+	}
+}
+
+func (s *Server) buildSessionItemView(item sessions.RenderItem, sessionCwd string, isSubagentThread bool, subagentDisplayName, subagentDisplayRole string) itemView {
 	autoCtx := item.Role == "user" && sessions.IsAutoContextUserMessage(item.Content)
 	isSubagentNotification := item.SubagentID != ""
 	turnAbortedMessage, isTurnAborted := "", false
@@ -2125,7 +2224,8 @@ func (s *Server) buildSessionItemView(item sessions.RenderItem, isSubagentThread
 			isTurnAborted = true
 		}
 	}
-	renderText := item.Content
+	displayItem := displayRenderItem(item, sessionCwd)
+	renderText := displayItem.Content
 	if autoCtx && !isTurnAborted {
 		renderText = escapeAutoContextTags(renderText)
 	}
@@ -2138,13 +2238,13 @@ func (s *Server) buildSessionItemView(item sessions.RenderItem, isSubagentThread
 		RoleLabel:          semanticRoleLabel(item.Role),
 		SpeakerClass:       semanticRoleLabel(item.Role),
 		Title:              item.Title,
-		Content:            item.Content,
+		Content:            displayItem.Content,
 		Class:              item.Class,
 		SubagentID:         item.SubagentID,
 		SubagentNickname:   item.SubagentNickname,
 		SubagentStatusType: item.SubagentStatusType,
-		SubagentRequest:    item.SubagentRequest,
-		Markdown:           renderItemMarkdown(item),
+		SubagentRequest:    displayItem.SubagentRequest,
+		Markdown:           renderItemMarkdown(displayItem),
 		HTML:               markdownToHTML(renderText),
 	}
 	if item.Subtype == "function_call" && item.ToolName == "update_plan" {
@@ -2164,8 +2264,8 @@ func (s *Server) buildSessionItemView(item sessions.RenderItem, isSubagentThread
 	}
 	if isSubagentNotification {
 		view.Class = strings.TrimSpace(view.Class + " subagent-notification")
-		if item.SubagentRequest != "" {
-			view.SubagentRequestHTML = markdownToHTML(item.SubagentRequest)
+		if displayItem.SubagentRequest != "" {
+			view.SubagentRequestHTML = markdownToHTML(displayItem.SubagentRequest)
 		}
 		if subagentFile, ok := s.idx.LookupByID(item.SubagentID); ok {
 			view.SubagentSessionPath = "/" + subagentFile.Date.Path() + "/" + subagentFile.Name + "#page-top"
@@ -2224,7 +2324,7 @@ func shouldGroupToolRun(callItem, outputItem sessions.RenderItem) bool {
 	}
 }
 
-func buildToolRunView(callItem sessions.RenderItem, callView itemView, outputItem sessions.RenderItem, outputView itemView) itemView {
+func buildToolRunView(callItem sessions.RenderItem, callView itemView, outputItem sessions.RenderItem, outputView itemView, tokenUsage toolRunUsageSummary) itemView {
 	title := "Tool run"
 	subtype := "tool_run"
 	if callItem.Subtype == "custom_tool_call" {
@@ -2232,23 +2332,26 @@ func buildToolRunView(callItem sessions.RenderItem, callView itemView, outputIte
 		subtype = "custom_tool_run"
 	}
 	return itemView{
-		Line:               callItem.Line,
-		Timestamp:          callItem.Timestamp,
-		Type:               callItem.Type,
-		Subtype:            subtype,
-		Role:               callItem.Role,
-		RoleLabel:          callView.RoleLabel,
-		SpeakerClass:       callView.SpeakerClass,
-		Title:              title,
-		Content:            strings.TrimSpace(callItem.Content + "\n\n" + outputItem.Content),
-		Class:              strings.TrimSpace(callView.Class + " tool-run"),
-		Markdown:           renderToolRunMarkdown(title, callItem, outputItem),
-		HTML:               callView.HTML,
-		ToolRunCallTitle:   callView.Title,
-		ToolRunOutputLine:  outputItem.Line,
-		ToolRunOutputTitle: outputView.Title,
-		ToolRunOutputHTML:  outputView.HTML,
-		ToolRunOutputTime:  outputItem.Timestamp,
+		Line:                callItem.Line,
+		Timestamp:           callItem.Timestamp,
+		Type:                callItem.Type,
+		Subtype:             subtype,
+		Role:                callItem.Role,
+		RoleLabel:           callView.RoleLabel,
+		SpeakerClass:        callView.SpeakerClass,
+		Title:               title,
+		Content:             strings.TrimSpace(callItem.Content + "\n\n" + outputItem.Content),
+		Class:               strings.TrimSpace(callView.Class + " tool-run"),
+		Markdown:            renderToolRunMarkdown(title, callItem, outputItem),
+		HTML:                callView.HTML,
+		ToolRunCallTitle:    callView.Title,
+		ToolRunOutputLine:   outputItem.Line,
+		ToolRunOutputTitle:  outputView.Title,
+		ToolRunOutputHTML:   outputView.HTML,
+		ToolRunOutputTime:   outputItem.Timestamp,
+		ToolRunUsage:        tokenUsage.Text,
+		ToolRunUsageTotal:   tokenUsage.TotalTokens,
+		ToolRunUsageDisplay: tokenUsage.Usage,
 	}
 }
 
@@ -2271,6 +2374,7 @@ func annotateToolRunGroups(items []itemView) {
 		items[start].ToolRunGroupTitle = toolRunGroupTitle(items[start:end])
 		items[start].ToolRunGroupCount = count
 		items[start].ToolRunGroupLastLine = lastLine
+		items[start].ToolRunGroupUsage = toolRunGroupUsage(items[start:end])
 		items[end-1].ToolRunGroupEnd = true
 
 		for index := start; index < end; index++ {
@@ -2287,6 +2391,22 @@ func annotateToolRunGroups(items []itemView) {
 
 		start = end - 1
 	}
+}
+
+func toolRunGroupUsage(items []itemView) string {
+	var usage sessions.TokenUsageDisplay
+	hasUsage := false
+	for _, item := range items {
+		if item.ToolRunUsageTotal == 0 {
+			continue
+		}
+		usage = usage.Add(item.ToolRunUsageDisplay)
+		hasUsage = true
+	}
+	if !hasUsage {
+		return ""
+	}
+	return usage.Format(false)
 }
 
 func isGroupedToolRunView(item itemView) bool {

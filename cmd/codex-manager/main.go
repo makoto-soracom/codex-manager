@@ -46,17 +46,11 @@ func main() {
 	}
 
 	activeIdx := active.NewIndex()
-	if err := activeIdx.RefreshFrom(idx); err != nil {
-		log.Printf("initial active index build failed: %v", err)
-	}
 
 	activeState, err := active.LoadStateStore(active.DefaultStatePath(cfg.SessionsDir))
 	if err != nil {
 		log.Printf("active state load failed: %v", err)
 		activeState, _ = active.LoadStateStore("")
-	}
-	if err := activeState.Reconcile(activeIdx.Summaries()); err != nil {
-		log.Printf("initial active state reconcile failed: %v", err)
 	}
 
 	notificationStore, err := notifications.LoadStore(notifications.DefaultPath(cfg.SessionsDir))
@@ -84,11 +78,13 @@ func main() {
 				log.Printf("rescan failed: %v", err)
 				continue
 			}
-			if err := activeIdx.RefreshFrom(idx); err != nil {
-				log.Printf("active reindex failed: %v", err)
-			}
-			if err := activeState.Reconcile(activeIdx.Summaries()); err != nil {
-				log.Printf("active state reconcile failed: %v", err)
+			if !activeIdx.LastUpdated().IsZero() {
+				if err := activeIdx.RefreshFrom(idx); err != nil {
+					log.Printf("active reindex failed: %v", err)
+				}
+				if err := activeState.Reconcile(activeIdx.Summaries()); err != nil {
+					log.Printf("active state reconcile failed: %v", err)
+				}
 			}
 			if err := searchIdx.RefreshFrom(idx); err != nil {
 				log.Printf("search reindex failed: %v", err)
@@ -103,6 +99,7 @@ func main() {
 
 	server := web.NewServer(idx, searchIdx, renderer, cfg.SessionsDir, cfg.ShareDir, cfg.ShareAddr, cfg.Theme)
 	server.EnableActive(activeIdx, activeState, 15*time.Second)
+	server.WarmActiveAsync()
 	server.EnableNotifications(notificationStore)
 	server.EnableRepoOverrides(repositoryOverrideStore)
 	if htmlBucketClient != nil {

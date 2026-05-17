@@ -270,6 +270,12 @@ func TestHandleActiveStateMarksEndedAndReopens(t *testing.T) {
 	}
 
 	server := newActiveTestServer(t, sessionsDir)
+	if !server.active.LastUpdated().IsZero() {
+		t.Fatalf("expected active index to stay lazy before first active access")
+	}
+	if err := server.refreshActiveIfStale(); err != nil {
+		t.Fatalf("refreshActiveIfStale: %v", err)
+	}
 	summary := server.active.Summaries()[0]
 
 	postReq := httptest.NewRequest(http.MethodPost, "http://example.com/active/state", strings.NewReader("action=end&key="+url.QueryEscape(summary.Key)))
@@ -321,6 +327,12 @@ func TestHandleSessionShowsThreadStateActionAndEndedState(t *testing.T) {
 	}
 
 	server := newActiveTestServer(t, sessionsDir)
+	if !server.active.LastUpdated().IsZero() {
+		t.Fatalf("expected active index to stay lazy before first active access")
+	}
+	if err := server.refreshActiveIfStale(); err != nil {
+		t.Fatalf("refreshActiveIfStale: %v", err)
+	}
 	summary := server.active.Summaries()[0]
 
 	sessionReq := httptest.NewRequest(http.MethodGet, "http://example.com/2026/03/18/thread-state.jsonl", nil)
@@ -470,6 +482,50 @@ func TestHandleDayShowsThreadStateActionsForDirectorySessions(t *testing.T) {
 	}
 }
 
+func TestWarmActiveAsyncPopulatesActiveIndex(t *testing.T) {
+	root := t.TempDir()
+	sessionsDir := filepath.Join(root, "sessions")
+	dateDir := filepath.Join(sessionsDir, "2026", "03", "18")
+	if err := os.MkdirAll(dateDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	filePath := filepath.Join(dateDir, "warm.jsonl")
+	data := "" +
+		"{\"timestamp\":\"2026-03-18T05:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"session-warm\",\"timestamp\":\"2026-03-18T05:00:00Z\",\"cwd\":\"/tmp/app\",\"originator\":\"cli\",\"cli_version\":\"0.1\"}}\n" +
+		"{\"timestamp\":\"2026-03-18T05:00:10Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"## My request for Codex:\\nWarm it\"}]}}\n" +
+		"{\"timestamp\":\"2026-03-18T05:00:20Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"task_complete\"}}\n"
+	if err := os.WriteFile(filePath, []byte(data), 0o600); err != nil {
+		t.Fatalf("write session: %v", err)
+	}
+
+	server := newActiveTestServer(t, sessionsDir)
+	if !server.active.LastUpdated().IsZero() {
+		t.Fatalf("expected active index to stay lazy before warm-up")
+	}
+
+	server.WarmActiveAsync()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if !server.active.LastUpdated().IsZero() {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if server.active.LastUpdated().IsZero() {
+		t.Fatal("expected active warm-up to populate the index")
+	}
+	summaries := server.active.Summaries()
+	if len(summaries) != 1 {
+		t.Fatalf("expected one active summary after warm-up, got %d", len(summaries))
+	}
+	if summaries[0].SessionID != "session-warm" {
+		t.Fatalf("expected warmed session id, got %q", summaries[0].SessionID)
+	}
+}
+
 func newActiveTestServer(t *testing.T, sessionsDir string) *Server {
 	t.Helper()
 
@@ -479,9 +535,6 @@ func newActiveTestServer(t *testing.T, sessionsDir string) *Server {
 	}
 
 	activeIdx := active.NewIndex()
-	if err := activeIdx.RefreshFrom(idx); err != nil {
-		t.Fatalf("refresh active index: %v", err)
-	}
 
 	state, err := active.LoadStateStore(filepath.Join(filepath.Dir(sessionsDir), "session_state.json"))
 	if err != nil {

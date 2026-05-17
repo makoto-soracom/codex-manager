@@ -8,17 +8,20 @@ import (
 	"html"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 )
 
 // Session represents a parsed conversation file.
 type Session struct {
-	Path               string
-	Meta               *SessionMeta
-	Items              []RenderItem
-	subagentRequests   map[string]string
-	subagentNicknames  map[string]string
-	spawnRequestByCall map[string]string
+	Path                    string
+	Meta                    *SessionMeta
+	Items                   []RenderItem
+	subagentRequests        map[string]string
+	subagentNicknames       map[string]string
+	spawnRequestByCall      map[string]string
+	previousTotalTokenUsage *tokenUsage
+	taskStartTokenUsage     *tokenUsage
 }
 
 // SessionMeta holds metadata from session_meta entries.
@@ -79,6 +82,7 @@ func (s *sessionMetaSource) UnmarshalJSON(data []byte) error {
 // RenderItem is a display-ready entry for the HTML view.
 type RenderItem struct {
 	Line               int
+	EndLine            int
 	Timestamp          string
 	Type               string
 	Subtype            string
@@ -95,6 +99,7 @@ type RenderItem struct {
 	SubagentNickname   string
 	SubagentStatusType string
 	SubagentRequest    string
+	TokenUsage         *TokenUsageDisplay
 }
 
 type envelope struct {
@@ -111,6 +116,7 @@ type responseContent struct {
 type responseItemPayload struct {
 	Type      string            `json:"type"`
 	Role      string            `json:"role"`
+	Phase     string            `json:"phase"`
 	Content   []responseContent `json:"content"`
 	Name      string            `json:"name"`
 	Arguments string            `json:"arguments"`
@@ -122,8 +128,79 @@ type responseItemPayload struct {
 }
 
 type eventMsgPayload struct {
-	Type    string `json:"type"`
-	Message string `json:"message"`
+	Type       string          `json:"type"`
+	Message    string          `json:"message"`
+	Info       *tokenCountInfo `json:"info"`
+	RateLimits *rateLimitInfo  `json:"rate_limits"`
+	DurationMS int64           `json:"duration_ms"`
+}
+
+type tokenCountInfo struct {
+	TotalTokenUsage  tokenUsage `json:"total_token_usage"`
+	LastTokenUsage   tokenUsage `json:"last_token_usage"`
+	ModelContextSize int        `json:"model_context_window"`
+}
+
+type tokenUsage struct {
+	InputTokens           int `json:"input_tokens"`
+	CachedInputTokens     int `json:"cached_input_tokens"`
+	OutputTokens          int `json:"output_tokens"`
+	ReasoningOutputTokens int `json:"reasoning_output_tokens"`
+	TotalTokens           int `json:"total_tokens"`
+}
+
+// TokenUsageDisplay is the display-ready token usage for a token_count event.
+type TokenUsageDisplay struct {
+	InputTokens           int
+	CachedInputTokens     int
+	OutputTokens          int
+	ReasoningOutputTokens int
+	TotalTokens           int
+	RateLimit             string
+}
+
+func (usage TokenUsageDisplay) Add(other TokenUsageDisplay) TokenUsageDisplay {
+	usage.InputTokens += other.InputTokens
+	usage.CachedInputTokens += other.CachedInputTokens
+	usage.OutputTokens += other.OutputTokens
+	usage.ReasoningOutputTokens += other.ReasoningOutputTokens
+	usage.TotalTokens += other.TotalTokens
+	if usage.RateLimit == "" {
+		usage.RateLimit = other.RateLimit
+	}
+	return usage
+}
+
+func (usage TokenUsageDisplay) Format(includeRateLimit bool) string {
+	parts := []string{
+		"input=" + formatTokenCount(usage.InputTokens),
+		"cached=" + formatTokenCount(usage.CachedInputTokens),
+		"output=" + formatTokenCount(usage.OutputTokens) + " (reasoning=" + formatTokenCount(usage.ReasoningOutputTokens) + ")",
+		"total=" + formatTokenCount(usage.TotalTokens),
+	}
+	if includeRateLimit && strings.TrimSpace(usage.RateLimit) != "" {
+		parts = append(parts, "rate limit="+strings.TrimSpace(usage.RateLimit))
+	}
+	return strings.Join(parts, ", ")
+}
+
+func (usage TokenUsageDisplay) FormatTotal() string {
+	return "total=" + formatTokenCount(usage.TotalTokens)
+}
+
+func (usage TokenUsageDisplay) HasUsage() bool {
+	return usage.InputTokens > 0 ||
+		usage.CachedInputTokens > 0 ||
+		usage.OutputTokens > 0 ||
+		usage.ReasoningOutputTokens > 0 ||
+		usage.TotalTokens > 0
+}
+
+type rateLimitInfo struct {
+	LimitID              string `json:"limit_id"`
+	LimitName            string `json:"limit_name"`
+	PlanType             string `json:"plan_type"`
+	RateLimitReachedType string `json:"rate_limit_reached_type"`
 }
 
 type instructionText struct {
@@ -266,6 +343,8 @@ func parseLine(lineText string, lineNum int, session *Session) *RenderItem {
 		return nil
 	case "response_item":
 		return parseResponseItem(env, lineText, lineNum, session)
+	case "event_msg":
+		return parseEventMsg(env, lineText, lineNum, session)
 	case "message":
 		return parseDirectMessage(lineText, lineNum, session)
 	case "reasoning":
@@ -288,6 +367,7 @@ func parseResponseItem(env envelope, lineText string, lineNum int, session *Sess
 
 	item := RenderItem{
 		Line:      lineNum,
+		EndLine:   lineNum,
 		Timestamp: env.Timestamp,
 		Type:      env.Type,
 		Subtype:   payload.Type,
@@ -419,6 +499,7 @@ func parseDirectMessage(lineText string, lineNum int, session *Session) *RenderI
 	}
 	item := RenderItem{
 		Line:    lineNum,
+		EndLine: lineNum,
 		Type:    "response_item",
 		Subtype: "message",
 		Role:    payload.Role,
@@ -459,6 +540,7 @@ func parseDirectReasoning(lineText string, lineNum int) *RenderItem {
 	}
 	return &RenderItem{
 		Line:    lineNum,
+		EndLine: lineNum,
 		Type:    "response_item",
 		Subtype: "reasoning",
 		Role:    "assistant",
@@ -468,35 +550,267 @@ func parseDirectReasoning(lineText string, lineNum int) *RenderItem {
 	}
 }
 
-func parseEventMsg(env envelope, lineText string, lineNum int) *RenderItem {
+func parseEventMsg(env envelope, lineText string, lineNum int, session *Session) *RenderItem {
 	var payload eventMsgPayload
 	if err := json.Unmarshal(env.Payload, &payload); err != nil {
-		return &RenderItem{
-			Line:      lineNum,
-			Timestamp: env.Timestamp,
-			Type:      env.Type,
-			Title:     "event_msg",
-			Content:   prettyJSON(lineText),
-			Raw:       lineText,
-			Class:     roleClass("system"),
-		}
+		return nil
 	}
+	switch payload.Type {
+	case "token_count":
+		return parseTokenCountEvent(env, lineText, lineNum, session, payload)
+	case "task_started":
+		if session != nil {
+			session.taskStartTokenUsage = cloneTokenUsage(session.previousTotalTokenUsage)
+		}
+		return nil
+	case "task_complete":
+		return parseTaskCompleteEvent(env, lineText, lineNum, session, payload)
+	default:
+		return nil
+	}
+}
 
-	content := payload.Message
-	if content == "" {
-		content = prettyJSON(string(env.Payload))
+func parseTokenCountEvent(env envelope, lineText string, lineNum int, session *Session, payload eventMsgPayload) *RenderItem {
+	var previous *tokenUsage
+	if session != nil && session.previousTotalTokenUsage != nil {
+		usage := *session.previousTotalTokenUsage
+		previous = &usage
+	}
+	tokenUsage, content := renderTokenCountContent(payload.Info, payload.RateLimits, previous)
+	if session != nil && payload.Info != nil && hasTokenUsage(payload.Info.TotalTokenUsage) {
+		usage := payload.Info.TotalTokenUsage
+		session.previousTotalTokenUsage = &usage
+	}
+	if strings.TrimSpace(content) == "" {
+		return nil
 	}
 
 	return &RenderItem{
-		Line:      lineNum,
-		Timestamp: env.Timestamp,
-		Type:      env.Type,
-		Subtype:   payload.Type,
-		Title:     titleForType(env.Type, payload.Type),
-		Content:   content,
-		Raw:       lineText,
-		Class:     roleClass("user"),
+		Line:       lineNum,
+		EndLine:    lineNum,
+		Timestamp:  env.Timestamp,
+		Type:       env.Type,
+		Subtype:    payload.Type,
+		Title:      titleForType(env.Type, payload.Type),
+		Content:    content,
+		Raw:        lineText,
+		Role:       "system",
+		Class:      roleClass("system"),
+		TokenUsage: tokenUsage,
 	}
+}
+
+func parseTaskCompleteEvent(env envelope, lineText string, lineNum int, session *Session, payload eventMsgPayload) *RenderItem {
+	var usage *TokenUsageDisplay
+	if session != nil && session.previousTotalTokenUsage != nil {
+		displayUsage := tokenUsageForDisplay(*session.previousTotalTokenUsage, session.taskStartTokenUsage)
+		if hasTokenUsage(displayUsage) {
+			usage = &TokenUsageDisplay{
+				InputTokens:           displayUsage.InputTokens,
+				CachedInputTokens:     displayUsage.CachedInputTokens,
+				OutputTokens:          displayUsage.OutputTokens,
+				ReasoningOutputTokens: displayUsage.ReasoningOutputTokens,
+				TotalTokens:           displayUsage.TotalTokens,
+			}
+		}
+		session.taskStartTokenUsage = nil
+	}
+	content := formatTaskSummary(payload.DurationMS, usage)
+	if strings.TrimSpace(content) == "" {
+		return nil
+	}
+	return &RenderItem{
+		Line:       lineNum,
+		EndLine:    lineNum,
+		Timestamp:  env.Timestamp,
+		Type:       env.Type,
+		Subtype:    payload.Type,
+		Title:      titleForType(env.Type, payload.Type),
+		Content:    content,
+		Raw:        lineText,
+		Role:       "system",
+		Class:      strings.TrimSpace(roleClass("system") + " task-summary"),
+		TokenUsage: usage,
+	}
+}
+
+func renderTokenCountContent(info *tokenCountInfo, limits *rateLimitInfo, previous *tokenUsage) (*TokenUsageDisplay, string) {
+	var display *TokenUsageDisplay
+	if info != nil && hasTokenUsage(info.LastTokenUsage) {
+		current := info.LastTokenUsage
+		if previous != nil {
+			current = info.TotalTokenUsage
+		}
+		usage := tokenUsageForDisplay(current, previous)
+		if hasTokenUsage(usage) {
+			display = &TokenUsageDisplay{
+				InputTokens:           usage.InputTokens,
+				CachedInputTokens:     usage.CachedInputTokens,
+				OutputTokens:          usage.OutputTokens,
+				ReasoningOutputTokens: usage.ReasoningOutputTokens,
+				TotalTokens:           usage.TotalTokens,
+				RateLimit:             formatRateLimit(limits),
+			}
+		}
+	}
+	if display == nil && !hasReachedRateLimit(limits) {
+		return nil, ""
+	}
+	parts := make([]string, 0, 2)
+	if display != nil {
+		parts = append(parts, display.Format(false))
+	}
+	if value := formatRateLimit(limits); value != "" {
+		parts = append(parts, "rate limit="+value)
+	}
+	return display, strings.Join(parts, ", ")
+}
+
+func cloneTokenUsage(usage *tokenUsage) *tokenUsage {
+	if usage == nil {
+		return nil
+	}
+	cloned := *usage
+	return &cloned
+}
+
+func tokenUsageForDisplay(current tokenUsage, previous *tokenUsage) tokenUsage {
+	display := tokenUsage{
+		InputTokens:           nonCachedInputTokens(current),
+		CachedInputTokens:     current.CachedInputTokens,
+		OutputTokens:          current.OutputTokens,
+		ReasoningOutputTokens: current.ReasoningOutputTokens,
+		TotalTokens:           current.TotalTokens,
+	}
+	if previous == nil {
+		return display
+	}
+	rawDelta := tokenUsage{
+		InputTokens:           current.InputTokens - previous.InputTokens,
+		CachedInputTokens:     current.CachedInputTokens - previous.CachedInputTokens,
+		OutputTokens:          current.OutputTokens - previous.OutputTokens,
+		ReasoningOutputTokens: current.ReasoningOutputTokens - previous.ReasoningOutputTokens,
+		TotalTokens:           current.TotalTokens - previous.TotalTokens,
+	}
+	return tokenUsage{
+		InputTokens:           nonCachedInputTokens(rawDelta),
+		CachedInputTokens:     rawDelta.CachedInputTokens,
+		OutputTokens:          rawDelta.OutputTokens,
+		ReasoningOutputTokens: rawDelta.ReasoningOutputTokens,
+		TotalTokens:           rawDelta.TotalTokens,
+	}
+}
+
+func hasTokenUsage(usage tokenUsage) bool {
+	return usage.InputTokens > 0 ||
+		usage.CachedInputTokens > 0 ||
+		usage.OutputTokens > 0 ||
+		usage.ReasoningOutputTokens > 0 ||
+		usage.TotalTokens > 0
+}
+
+func nonCachedInputTokens(usage tokenUsage) int {
+	value := usage.InputTokens - usage.CachedInputTokens
+	if value < 0 {
+		return 0
+	}
+	return value
+}
+
+func formatRateLimit(limits *rateLimitInfo) string {
+	if limits == nil {
+		return ""
+	}
+	name := strings.TrimSpace(limits.LimitName)
+	if name == "" {
+		name = strings.TrimSpace(limits.LimitID)
+	}
+	plan := strings.TrimSpace(limits.PlanType)
+	reached := strings.TrimSpace(limits.RateLimitReachedType)
+	if name == "" && plan == "" && reached == "" {
+		return ""
+	}
+	value := ""
+	if name != "" {
+		value = name
+	}
+	if plan != "" {
+		value += " (" + plan + ")"
+	}
+	if reached == "" {
+		return strings.TrimSpace(value)
+	}
+	if value == "" {
+		return reached
+	}
+	return value + ", reached=" + reached
+}
+
+func hasReachedRateLimit(limits *rateLimitInfo) bool {
+	if limits == nil {
+		return false
+	}
+	return strings.TrimSpace(limits.RateLimitReachedType) != ""
+}
+
+func formatTaskSummary(durationMS int64, usage *TokenUsageDisplay) string {
+	duration := formatTaskDuration(durationMS)
+	switch {
+	case duration != "" && usage != nil && usage.HasUsage():
+		return "Worked for " + duration + " (" + usage.Format(false) + ")"
+	case duration != "":
+		return "Worked for " + duration
+	case usage != nil && usage.HasUsage():
+		return usage.Format(false)
+	default:
+		return ""
+	}
+}
+
+func formatTaskDuration(durationMS int64) string {
+	if durationMS <= 0 {
+		return ""
+	}
+	totalSeconds := durationMS / 1000
+	if totalSeconds <= 0 {
+		return "0s"
+	}
+	hours := totalSeconds / 3600
+	minutes := (totalSeconds % 3600) / 60
+	seconds := totalSeconds % 60
+	parts := make([]string, 0, 3)
+	if hours > 0 {
+		parts = append(parts, strconv.FormatInt(hours, 10)+"h")
+	}
+	if minutes > 0 {
+		parts = append(parts, strconv.FormatInt(minutes, 10)+"m")
+	}
+	if seconds > 0 || len(parts) == 0 {
+		parts = append(parts, strconv.FormatInt(seconds, 10)+"s")
+	}
+	return strings.Join(parts, " ")
+}
+
+func formatTokenCount(value int) string {
+	if value < 0 {
+		return "-" + formatTokenCount(-value)
+	}
+	text := strconv.Itoa(value)
+	if len(text) <= 3 {
+		return text
+	}
+	first := len(text) % 3
+	if first == 0 {
+		first = 3
+	}
+	var builder strings.Builder
+	builder.Grow(len(text) + (len(text)-1)/3)
+	builder.WriteString(text[:first])
+	for index := first; index < len(text); index += 3 {
+		builder.WriteByte(',')
+		builder.WriteString(text[index : index+3])
+	}
+	return builder.String()
 }
 
 func extractContentText(contents []responseContent) string {
@@ -1150,8 +1464,13 @@ func titleForType(eventType, subType string) string {
 		}
 	}
 	if eventType == "event_msg" {
-		if subType == "user_message" {
+		switch subType {
+		case "user_message":
 			return "User context"
+		case "token_count":
+			return "Token usage"
+		case "task_complete":
+			return "Task usage"
 		}
 		return "Event"
 	}
@@ -1207,6 +1526,9 @@ func mergeConsecutive(items []RenderItem) []RenderItem {
 				}
 				current = item
 				continue
+			}
+			if item.EndLine > current.EndLine {
+				current.EndLine = item.EndLine
 			}
 			if strings.TrimSpace(item.Content) != "" {
 				if strings.TrimSpace(current.Content) != "" {

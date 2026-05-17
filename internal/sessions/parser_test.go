@@ -59,6 +59,150 @@ func TestParseSession(t *testing.T) {
 	}
 }
 
+func TestParseSessionShowsTokenCountEvent(t *testing.T) {
+	base := t.TempDir()
+	filePath := filepath.Join(base, "session.jsonl")
+	data := "" +
+		"{\"timestamp\":\"2026-05-13T23:56:18.540Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\"}}\n" +
+		"{\"timestamp\":\"2026-05-13T23:56:20.367Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"total_token_usage\":{\"input_tokens\":28676,\"cached_input_tokens\":11136,\"output_tokens\":54,\"reasoning_output_tokens\":38,\"total_tokens\":28730},\"last_token_usage\":{\"input_tokens\":28881,\"cached_input_tokens\":6528,\"output_tokens\":14,\"reasoning_output_tokens\":0,\"total_tokens\":28895},\"model_context_window\":258400},\"rate_limits\":{\"limit_id\":\"codex\",\"limit_name\":null,\"primary\":null,\"secondary\":null,\"credits\":null,\"plan_type\":\"team\",\"rate_limit_reached_type\":null}}}\n"
+
+	if err := os.WriteFile(filePath, []byte(data), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	session, err := ParseSession(filePath)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(session.Items) != 1 {
+		t.Fatalf("expected only token count event to be visible, got %d items: %#v", len(session.Items), session.Items)
+	}
+	item := session.Items[0]
+	if item.Line != 2 || item.Type != "event_msg" || item.Subtype != "token_count" || item.Role != "system" || item.Title != "Token usage" {
+		t.Fatalf("unexpected token count item: %#v", item)
+	}
+	want := "input=22,353, cached=6,528, output=14 (reasoning=0), total=28,895, rate limit=codex (team)"
+	if item.Content != want {
+		t.Fatalf("expected compact token count content %q, got %q", want, item.Content)
+	}
+	for _, dropped := range []string{"Total token usage", "Model context window", "11,136", "28,881"} {
+		if strings.Contains(item.Content, dropped) {
+			t.Fatalf("expected compact token count content to drop %q, got %q", dropped, item.Content)
+		}
+	}
+}
+
+func TestParseSessionShowsTokenCountDeltaFromCumulativeTotals(t *testing.T) {
+	base := t.TempDir()
+	filePath := filepath.Join(base, "session.jsonl")
+	data := "" +
+		"{\"timestamp\":\"2026-05-14T09:22:16.235Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"total_token_usage\":{\"input_tokens\":35041630,\"cached_input_tokens\":34567808,\"output_tokens\":27818,\"reasoning_output_tokens\":11254,\"total_tokens\":35069448},\"last_token_usage\":{\"input_tokens\":225839,\"cached_input_tokens\":225664,\"output_tokens\":37,\"reasoning_output_tokens\":0,\"total_tokens\":225876},\"model_context_window\":258400},\"rate_limits\":{\"limit_id\":\"codex\",\"limit_name\":null,\"primary\":null,\"secondary\":null,\"credits\":null,\"plan_type\":\"team\",\"rate_limit_reached_type\":null}}}\n" +
+		"{\"timestamp\":\"2026-05-14T09:22:29.774Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"total_token_usage\":{\"input_tokens\":35267556,\"cached_input_tokens\":34793472,\"output_tokens\":27855,\"reasoning_output_tokens\":11254,\"total_tokens\":35295411},\"last_token_usage\":{\"input_tokens\":225926,\"cached_input_tokens\":225664,\"output_tokens\":37,\"reasoning_output_tokens\":0,\"total_tokens\":225963},\"model_context_window\":258400},\"rate_limits\":{\"limit_id\":\"codex\",\"limit_name\":null,\"primary\":null,\"secondary\":null,\"credits\":null,\"plan_type\":\"team\",\"rate_limit_reached_type\":null}}}\n"
+
+	if err := os.WriteFile(filePath, []byte(data), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	session, err := ParseSession(filePath)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(session.Items) != 2 {
+		t.Fatalf("expected two token count events, got %d items: %#v", len(session.Items), session.Items)
+	}
+
+	firstWant := "input=175, cached=225,664, output=37 (reasoning=0), total=225,876, rate limit=codex (team)"
+	if session.Items[0].Content != firstWant {
+		t.Fatalf("expected first token count content %q, got %q", firstWant, session.Items[0].Content)
+	}
+
+	secondWant := "input=262, cached=225,664, output=37 (reasoning=0), total=225,963, rate limit=codex (team)"
+	if session.Items[1].Content != secondWant {
+		t.Fatalf("expected second token count delta %q, got %q", secondWant, session.Items[1].Content)
+	}
+}
+
+func TestParseSessionTokenCountDeltaDoesNotSubtractLastUsage(t *testing.T) {
+	base := t.TempDir()
+	filePath := filepath.Join(base, "session.jsonl")
+	data := "" +
+		"{\"timestamp\":\"2026-05-14T09:59:22.936Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"total_token_usage\":{\"input_tokens\":1329103,\"cached_input_tokens\":1160448,\"output_tokens\":7121,\"reasoning_output_tokens\":3185,\"total_tokens\":1336224},\"last_token_usage\":{\"input_tokens\":147032,\"cached_input_tokens\":144768,\"output_tokens\":407,\"reasoning_output_tokens\":275,\"total_tokens\":147439},\"model_context_window\":258400},\"rate_limits\":{\"limit_id\":\"codex\",\"limit_name\":null,\"primary\":null,\"secondary\":null,\"credits\":null,\"plan_type\":\"team\",\"rate_limit_reached_type\":null}}}\n" +
+		"{\"timestamp\":\"2026-05-14T09:59:31.914Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"total_token_usage\":{\"input_tokens\":1480144,\"cached_input_tokens\":1307264,\"output_tokens\":7360,\"reasoning_output_tokens\":3385,\"total_tokens\":1487504},\"last_token_usage\":{\"input_tokens\":151041,\"cached_input_tokens\":146816,\"output_tokens\":239,\"reasoning_output_tokens\":200,\"total_tokens\":151280},\"model_context_window\":258400},\"rate_limits\":{\"limit_id\":\"codex\",\"limit_name\":null,\"primary\":null,\"secondary\":null,\"credits\":null,\"plan_type\":\"team\",\"rate_limit_reached_type\":null}}}\n"
+
+	if err := os.WriteFile(filePath, []byte(data), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	session, err := ParseSession(filePath)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(session.Items) != 2 {
+		t.Fatalf("expected two token count events, got %d items: %#v", len(session.Items), session.Items)
+	}
+
+	want := "input=4,225, cached=146,816, output=239 (reasoning=200), total=151,280, rate limit=codex (team)"
+	if session.Items[1].Content != want {
+		t.Fatalf("expected cumulative token count delta %q, got %q", want, session.Items[1].Content)
+	}
+}
+
+func TestParseSessionSkipsZeroTokenCountNoise(t *testing.T) {
+	base := t.TempDir()
+	filePath := filepath.Join(base, "session.jsonl")
+	data := "" +
+		"{\"timestamp\":\"2026-05-14T10:19:24.720Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":null,\"rate_limits\":{\"limit_id\":\"codex\",\"limit_name\":null,\"primary\":null,\"secondary\":null,\"credits\":null,\"plan_type\":\"team\",\"rate_limit_reached_type\":null}}}\n" +
+		"{\"timestamp\":\"2026-05-14T10:19:29.192Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"total_token_usage\":{\"input_tokens\":28685,\"cached_input_tokens\":6528,\"output_tokens\":215,\"reasoning_output_tokens\":198,\"total_tokens\":28900},\"last_token_usage\":{\"input_tokens\":28685,\"cached_input_tokens\":6528,\"output_tokens\":215,\"reasoning_output_tokens\":198,\"total_tokens\":28900},\"model_context_window\":258400},\"rate_limits\":{\"limit_id\":\"codex\",\"limit_name\":null,\"primary\":null,\"secondary\":null,\"credits\":null,\"plan_type\":\"team\",\"rate_limit_reached_type\":null}}}\n" +
+		"{\"timestamp\":\"2026-05-14T10:20:18.362Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"total_token_usage\":{\"input_tokens\":28685,\"cached_input_tokens\":6528,\"output_tokens\":215,\"reasoning_output_tokens\":198,\"total_tokens\":28900},\"last_token_usage\":{\"input_tokens\":28685,\"cached_input_tokens\":6528,\"output_tokens\":215,\"reasoning_output_tokens\":198,\"total_tokens\":28900},\"model_context_window\":258400},\"rate_limits\":{\"limit_id\":\"codex\",\"limit_name\":null,\"primary\":null,\"secondary\":null,\"credits\":null,\"plan_type\":\"team\",\"rate_limit_reached_type\":null}}}\n"
+
+	if err := os.WriteFile(filePath, []byte(data), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	session, err := ParseSession(filePath)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(session.Items) != 1 {
+		t.Fatalf("expected only non-zero token usage event, got %d items: %#v", len(session.Items), session.Items)
+	}
+
+	want := "input=22,157, cached=6,528, output=215 (reasoning=198), total=28,900, rate limit=codex (team)"
+	if session.Items[0].Content != want {
+		t.Fatalf("expected token count content %q, got %q", want, session.Items[0].Content)
+	}
+}
+
+func TestParseSessionShowsTaskCompleteUsageFromTaskBaseline(t *testing.T) {
+	base := t.TempDir()
+	filePath := filepath.Join(base, "session.jsonl")
+	data := "" +
+		"{\"timestamp\":\"2026-05-14T10:45:01.996Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"total_token_usage\":{\"input_tokens\":1734285,\"cached_input_tokens\":1533952,\"output_tokens\":13422,\"reasoning_output_tokens\":6804,\"total_tokens\":1747707},\"last_token_usage\":{\"input_tokens\":114649,\"cached_input_tokens\":113536,\"output_tokens\":696,\"reasoning_output_tokens\":516,\"total_tokens\":115345},\"model_context_window\":258400},\"rate_limits\":{\"limit_id\":\"codex\",\"plan_type\":\"team\"}}}\n" +
+		"{\"timestamp\":\"2026-05-14T10:44:59.442Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\"}}\n" +
+		"{\"timestamp\":\"2026-05-14T10:46:44.236Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"total_token_usage\":{\"input_tokens\":2430122,\"cached_input_tokens\":2224896,\"output_tokens\":15855,\"reasoning_output_tokens\":7760,\"total_tokens\":2445977},\"last_token_usage\":{\"input_tokens\":117658,\"cached_input_tokens\":116608,\"output_tokens\":206,\"reasoning_output_tokens\":0,\"total_tokens\":117864},\"model_context_window\":258400},\"rate_limits\":{\"limit_id\":\"codex\",\"plan_type\":\"team\"}}}\n" +
+		"{\"timestamp\":\"2026-05-14T10:46:44.312Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"task_complete\",\"duration_ms\":102675}}\n"
+
+	if err := os.WriteFile(filePath, []byte(data), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	session, err := ParseSession(filePath)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(session.Items) != 3 {
+		t.Fatalf("expected baseline token, final token, and task summary, got %d items: %#v", len(session.Items), session.Items)
+	}
+	item := session.Items[2]
+	if item.Subtype != "task_complete" || item.Title != "Task usage" {
+		t.Fatalf("expected task summary item, got %#v", item)
+	}
+	want := "Worked for 1m 42s (input=4,893, cached=690,944, output=2,433 (reasoning=956), total=698,270)"
+	if item.Content != want {
+		t.Fatalf("expected task summary %q, got %q", want, item.Content)
+	}
+}
+
 func TestParseSessionDirectFormat(t *testing.T) {
 	base := t.TempDir()
 	filePath := filepath.Join(base, "session.jsonl")

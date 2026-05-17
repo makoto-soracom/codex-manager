@@ -31,14 +31,24 @@
     {{ end }}
   </header>
   <main>
-    {{ if .SelectedCwd }}
-    <div class="card search-card">
-      <label class="search-label" for="search-input">Search in {{ .SelectedCwdLabel }}</label>
-      <input id="search-input" class="search-input" type="search" placeholder="Search within this directory" autocomplete="off" spellcheck="false" data-cwd="{{ .SelectedCwd }}">
-      <p id="search-status" class="meta search-status"></p>
-      <ul id="search-results" class="list search-results"></ul>
-    </div>
-    {{ end }}
+	    {{ if .SelectedCwd }}
+	    <div class="card search-card">
+	      <form id="search-form" class="search-form" action="#" method="get">
+	        <label class="search-label" for="search-input">Search in {{ .SelectedCwdLabel }}</label>
+	        <div class="search-actions">
+	          <input id="search-input" class="search-input" type="search" placeholder="Search within this directory" autocomplete="off" spellcheck="false" data-cwd="{{ .SelectedCwd }}">
+	          <button class="nav-btn" type="submit">Search</button>
+	        </div>
+	      </form>
+	      <p id="search-status" class="meta search-status"></p>
+	      <div id="search-pagination" class="pagination search-pagination" hidden>
+	        <button id="search-prev" class="nav-btn" type="button">⬅️ Prev</button>
+	        <span id="search-page-meta" class="page-meta"></span>
+	        <button id="search-next" class="nav-btn" type="button">Next ➡️</button>
+	      </div>
+	      <ul id="search-results" class="list search-results"></ul>
+	    </div>
+	    {{ end }}
     {{ if .FallbackDate }}
     <div class="card" data-session-list>
       <p>No sessions found for this directory today.</p>
@@ -242,224 +252,283 @@
       });
     })();
 
-    (function () {
-      var input = document.getElementById("search-input");
-      var results = document.getElementById("search-results");
-      var status = document.getElementById("search-status");
-      if (!input || !results || !status) return;
+	    (function () {
+	      var form = document.getElementById("search-form");
+	      var input = document.getElementById("search-input");
+	      var results = document.getElementById("search-results");
+	      var status = document.getElementById("search-status");
+	      var pagination = document.getElementById("search-pagination");
+	      var prevButton = document.getElementById("search-prev");
+	      var nextButton = document.getElementById("search-next");
+	      var pageMeta = document.getElementById("search-page-meta");
+	      if (!form || !input || !results || !status || !pagination || !prevButton || !nextButton || !pageMeta) return;
 
-      var minChars = 2;
-      var debounceMs = 250;
-      var timer = null;
-      var controller = null;
-      var lastQuery = "";
-      var cwd = input.getAttribute("data-cwd") || "";
-      var dirFilterCards = document.querySelectorAll("[data-dir-filter]");
-      var sessionListCards = document.querySelectorAll("[data-session-list]");
+	      var minChars = 2;
+	      var pageLimit = 50;
+	      var controller = null;
+	      var currentQuery = "";
+	      var currentOffset = 0;
+	      var cwd = input.getAttribute("data-cwd") || "";
+	      var dirFilterCards = document.querySelectorAll("[data-dir-filter]");
+	      var sessionListCards = document.querySelectorAll("[data-session-list]");
 
-      function setDirFiltersHidden(hidden) {
-        if (!dirFilterCards || dirFilterCards.length === 0) return;
-        dirFilterCards.forEach(function (card) {
-          card.hidden = !!hidden;
-        });
-      }
+	      function setDirFiltersHidden(hidden) {
+	        if (!dirFilterCards || dirFilterCards.length === 0) return;
+	        dirFilterCards.forEach(function (card) {
+	          card.hidden = !!hidden;
+	        });
+	      }
 
-      function setSessionListsHidden(hidden) {
-        if (!sessionListCards || sessionListCards.length === 0) return;
-        sessionListCards.forEach(function (card) {
-          card.hidden = !!hidden;
-        });
-      }
+	      function setSessionListsHidden(hidden) {
+	        if (!sessionListCards || sessionListCards.length === 0) return;
+	        sessionListCards.forEach(function (card) {
+	          card.hidden = !!hidden;
+	        });
+	      }
 
-      function setStatus(message) {
-        status.textContent = message || "";
-      }
+	      function setStatus(message) {
+	        status.textContent = message || "";
+	      }
 
-      function clearResults(message) {
-        results.innerHTML = "";
-        setStatus(message);
-      }
+	      function clearResults(message) {
+	        results.innerHTML = "";
+	        setStatus(message);
+	        pagination.hidden = true;
+	        pageMeta.textContent = "";
+	        prevButton.disabled = true;
+	        nextButton.disabled = true;
+	        prevButton.classList.add("disabled");
+	        nextButton.classList.add("disabled");
+	      }
 
-      function highlightText(container, text, query) {
-        if (!query) {
-          container.textContent = text;
-          return;
-        }
-        var lowerText = text.toLowerCase();
-        var lowerQuery = query.toLowerCase();
-        var start = 0;
-        var index = lowerText.indexOf(lowerQuery, start);
-        if (index === -1) {
-          container.textContent = text;
-          return;
-        }
-        while (index !== -1) {
-          if (index > start) {
-            container.appendChild(document.createTextNode(text.slice(start, index)));
-          }
-          var mark = document.createElement("mark");
-          mark.textContent = text.slice(index, index + query.length);
-          container.appendChild(mark);
-          start = index + query.length;
-          index = lowerText.indexOf(lowerQuery, start);
-        }
-        if (start < text.length) {
-          container.appendChild(document.createTextNode(text.slice(start)));
-        }
-      }
+	      function updatePagination(offset, total, count) {
+	        if (!currentQuery || total <= count) {
+	          pagination.hidden = true;
+	          pageMeta.textContent = "";
+	          prevButton.disabled = true;
+	          nextButton.disabled = true;
+	          prevButton.classList.add("disabled");
+	          nextButton.classList.add("disabled");
+	          return;
+	        }
+	        pagination.hidden = false;
+	        var start = total === 0 ? 0 : offset + 1;
+	        var end = offset + count;
+	        pageMeta.textContent = "Showing " + start + "-" + end + " of " + total;
+	        prevButton.disabled = offset <= 0;
+	        nextButton.disabled = end >= total;
+	        prevButton.classList.toggle("disabled", prevButton.disabled);
+	        nextButton.classList.toggle("disabled", nextButton.disabled);
+	      }
 
-      function renderResults(data, query) {
-        results.innerHTML = "";
-        if (!data || !data.results || data.results.length === 0) {
-          if (query.length >= minChars) {
-            setStatus("No results.");
-          } else {
-            setStatus("Type at least " + minChars + " characters to search.");
-          }
-          return;
-        }
-        setStatus(data.results.length + " result" + (data.results.length === 1 ? "" : "s") + ".");
-        data.results.forEach(function (item) {
-          var li = document.createElement("li");
-          li.className = "session-list-item search-result";
+	      function setSearchActive(active) {
+	        setDirFiltersHidden(active);
+	        setSessionListsHidden(active);
+	      }
 
-          var link = document.createElement("a");
-          link.className = "link-item-link search-result-link";
-          var targetLine = item.line;
-          if (item.role === "assistant" && item.prevUserLine) {
-            targetLine = item.prevUserLine;
-          }
-          link.href = "/" + item.path + "/" + item.file + "#line-" + targetLine;
-          link.textContent = item.displayFile || item.file;
+	      function highlightText(container, text, query) {
+	        if (!query) {
+	          container.textContent = text;
+	          return;
+	        }
+	        var lowerText = text.toLowerCase();
+	        var lowerQuery = query.toLowerCase();
+	        var start = 0;
+	        var index = lowerText.indexOf(lowerQuery, start);
+	        if (index === -1) {
+	          container.textContent = text;
+	          return;
+	        }
+	        while (index !== -1) {
+	          if (index > start) {
+	            container.appendChild(document.createTextNode(text.slice(start, index)));
+	          }
+	          var mark = document.createElement("mark");
+	          mark.textContent = text.slice(index, index + query.length);
+	          container.appendChild(mark);
+	          start = index + query.length;
+	          index = lowerText.indexOf(lowerQuery, start);
+	        }
+	        if (start < text.length) {
+	          container.appendChild(document.createTextNode(text.slice(start)));
+	        }
+	      }
 
-          var meta = document.createElement("span");
-          meta.className = "meta search-result-meta";
-          var parts = [];
-          if (item.timestamp) {
-            parts.push(item.timestamp);
-          } else if (item.date) {
-            parts.push(item.date);
-          }
-          if (item.cwd) {
-            parts.push(item.cwd);
-          }
-          parts.push("Line " + item.line);
-          if (item.role) {
-            parts.push(item.role);
-          }
-          meta.textContent = parts.join(" | ");
+	      function renderResults(data, query) {
+	        results.innerHTML = "";
+	        if (!data || !data.results || data.results.length === 0) {
+	          if (query.length >= minChars) {
+	            setStatus("No results.");
+	            setSearchActive(true);
+	          } else {
+	            setStatus("Type at least " + minChars + " characters and press Enter to search.");
+	            setSearchActive(false);
+	          }
+	          updatePagination(0, 0, 0);
+	          return;
+	        }
+	        setSearchActive(true);
+	        var offset = data.offset || 0;
+	        var total = data.total || data.results.length;
+	        var end = offset + data.results.length;
+	        setStatus("Showing " + (offset + 1) + "-" + end + " of " + total + " result" + (total === 1 ? "" : "s") + ".");
+	        updatePagination(offset, total, data.results.length);
+	        data.results.forEach(function (item) {
+	          var li = document.createElement("li");
+	          li.className = "session-list-item search-result";
 
-          li.appendChild(link);
-          li.appendChild(meta);
+	          var link = document.createElement("a");
+	          link.className = "link-item-link search-result-link";
+	          var targetLine = item.line;
+	          if (item.role === "assistant" && item.prevUserLine) {
+	            targetLine = item.prevUserLine;
+	          }
+	          link.href = "/" + item.path + "/" + item.file + "#line-" + targetLine;
+	          link.textContent = item.displayFile || item.file;
 
-          var thread = document.createElement("div");
-          thread.className = "session-snippet session-snippet-thread";
-          var hasUserSnippet = false;
+	          var meta = document.createElement("span");
+	          meta.className = "meta search-result-meta";
+	          var parts = [];
+	          if (item.timestamp) {
+	            parts.push(item.timestamp);
+	          } else if (item.date) {
+	            parts.push(item.date);
+	          }
+	          if (item.cwd) {
+	            parts.push(item.cwd);
+	          }
+	          parts.push("Line " + item.line);
+	          if (item.role) {
+	            parts.push(item.role);
+	          }
+	          meta.textContent = parts.join(" | ");
 
-          function addSnippet(role, text, highlight, line) {
-            if (!text) return;
-            var snippetLink = document.createElement("a");
-            snippetLink.className = "snippet-link";
-            var resolvedLine = line && line > 0 ? line : targetLine;
-            snippetLink.href = "/" + item.path + "/" + item.file + "#line-" + resolvedLine;
+	          li.appendChild(link);
+	          li.appendChild(meta);
 
-            var itemBox = document.createElement("div");
-            itemBox.className = "session-item role-" + role + " snippet-item";
+	          var thread = document.createElement("div");
+	          thread.className = "session-snippet session-snippet-thread";
+	          var hasUserSnippet = false;
 
-            var content = document.createElement("div");
-            content.className = "session-content";
-            if (highlight) {
-              highlightText(content, text, query);
-            } else {
-              content.textContent = text;
-            }
+	          function addSnippet(role, text, highlight, line) {
+	            if (!text) return;
+	            var snippetLink = document.createElement("a");
+	            snippetLink.className = "snippet-link";
+	            var resolvedLine = line && line > 0 ? line : targetLine;
+	            snippetLink.href = "/" + item.path + "/" + item.file + "#line-" + resolvedLine;
 
-            itemBox.appendChild(content);
-            snippetLink.appendChild(itemBox);
-            thread.appendChild(snippetLink);
-          }
+	            var itemBox = document.createElement("div");
+	            itemBox.className = "session-item role-" + role + " snippet-item";
 
-          if (item.role === "user") {
-            hasUserSnippet = !!item.preview;
-            addSnippet("user", item.preview, true, item.line);
-            if (item.nextAssistant) {
-              addSnippet("assistant", item.nextAssistant, false, item.nextAssistantLine);
-            }
-          } else if (item.role === "assistant") {
-            if (item.prevUser) {
-              hasUserSnippet = true;
-              addSnippet("user", item.prevUser, false, item.prevUserLine);
-            }
-            addSnippet("assistant", item.preview, true, item.line);
-          } else if (item.preview) {
-            addSnippet(item.role || "unknown", item.preview, true, item.line);
-          }
+	            var content = document.createElement("div");
+	            content.className = "session-content";
+	            if (highlight) {
+	              highlightText(content, text, query);
+	            } else {
+	              content.textContent = text;
+	            }
 
-          if (thread.childNodes.length > 0) {
-            if (hasUserSnippet) {
-              var divider = document.createElement("div");
-              divider.className = "snippet-divider";
-              divider.textContent = "：";
-              thread.insertBefore(divider, thread.firstChild);
-            }
-            li.appendChild(thread);
-          }
+	            itemBox.appendChild(content);
+	            snippetLink.appendChild(itemBox);
+	            thread.appendChild(snippetLink);
+	          }
 
-          results.appendChild(li);
-        });
-      }
+	          if (item.role === "user") {
+	            hasUserSnippet = !!item.preview;
+	            addSnippet("user", item.preview, true, item.line);
+	            if (item.nextAssistant) {
+	              addSnippet("assistant", item.nextAssistant, false, item.nextAssistantLine);
+	            }
+	          } else if (item.role === "assistant") {
+	            if (item.prevUser) {
+	              hasUserSnippet = true;
+	              addSnippet("user", item.prevUser, false, item.prevUserLine);
+	            }
+	            addSnippet("assistant", item.preview, true, item.line);
+	          } else if (item.preview) {
+	            addSnippet(item.role || "unknown", item.preview, true, item.line);
+	          }
 
-      function fetchResults(query) {
-        if (controller) {
-          controller.abort();
-        }
-        controller = new AbortController();
-        setStatus("Searching...");
-        var url = "/search?query=" + encodeURIComponent(query) + "&limit=50";
-        if (cwd) {
-          url += "&cwd=" + encodeURIComponent(cwd);
-        }
-        fetch(url, {
-          method: "GET",
-          credentials: "same-origin",
-          signal: controller.signal
-        })
-          .then(function (response) {
-            if (!response.ok) throw new Error("search failed");
-            return response.json();
-          })
-          .then(function (data) {
-            renderResults(data, query);
-          })
-          .catch(function (error) {
-            if (error.name === "AbortError") return;
-            setStatus("Search failed.");
-          });
-      }
+	          if (thread.childNodes.length > 0) {
+	            if (hasUserSnippet) {
+	              var divider = document.createElement("div");
+	              divider.className = "snippet-divider";
+	              divider.textContent = "：";
+	              thread.insertBefore(divider, thread.firstChild);
+	            }
+	            li.appendChild(thread);
+	          }
 
-      input.addEventListener("input", function () {
-        var query = input.value.trim();
-        if (query === lastQuery) return;
-        lastQuery = query;
-        if (timer) {
-          clearTimeout(timer);
-        }
-        var hasQuery = query.length >= minChars;
-        setDirFiltersHidden(hasQuery);
-        setSessionListsHidden(hasQuery);
-        if (!hasQuery) {
-          clearResults("Type at least " + minChars + " characters to search.");
-          return;
-        }
-        timer = setTimeout(function () {
-          fetchResults(query);
-        }, debounceMs);
-      });
+	          results.appendChild(li);
+	        });
+	      }
 
-      setDirFiltersHidden(false);
-      setSessionListsHidden(false);
-      clearResults("Type at least " + minChars + " characters to search.");
-    })();
+	      function fetchResults(query, offset) {
+	        if (controller) {
+	          controller.abort();
+	        }
+	        controller = new AbortController();
+	        currentQuery = query;
+	        currentOffset = offset;
+	        setSearchActive(true);
+	        setStatus("Searching...");
+	        var url = "/search?query=" + encodeURIComponent(query) + "&limit=" + pageLimit + "&offset=" + offset;
+	        if (cwd) {
+	          url += "&cwd=" + encodeURIComponent(cwd);
+	        }
+	        fetch(url, {
+	          method: "GET",
+	          credentials: "same-origin",
+	          signal: controller.signal
+	        })
+	          .then(function (response) {
+	            if (!response.ok) throw new Error("search failed");
+	            return response.json();
+	          })
+	          .then(function (data) {
+	            currentOffset = data.offset || 0;
+	            renderResults(data, query);
+	          })
+	          .catch(function (error) {
+	            if (error.name === "AbortError") return;
+	            setStatus("Search failed.");
+	          });
+	      }
+
+	      form.addEventListener("submit", function (event) {
+	        event.preventDefault();
+	        var query = input.value.trim();
+	        if (query.length < minChars) {
+	          currentQuery = "";
+	          currentOffset = 0;
+	          setSearchActive(false);
+	          clearResults("Type at least " + minChars + " characters and press Enter to search.");
+	          return;
+	        }
+	        fetchResults(query, 0);
+	      });
+
+	      input.addEventListener("input", function () {
+	        if (input.value.trim() !== "") return;
+	        currentQuery = "";
+	        currentOffset = 0;
+	        setSearchActive(false);
+	        clearResults("Type at least " + minChars + " characters and press Enter to search.");
+	      });
+
+	      prevButton.addEventListener("click", function () {
+	        if (prevButton.disabled) return;
+	        fetchResults(currentQuery, Math.max(0, currentOffset - pageLimit));
+	      });
+
+	      nextButton.addEventListener("click", function () {
+	        if (nextButton.disabled) return;
+	        fetchResults(currentQuery, currentOffset + pageLimit);
+	      });
+
+	      setSearchActive(false);
+	      clearResults("Type at least " + minChars + " characters and press Enter to search.");
+	    })();
   </script>
 </body>
 </html>

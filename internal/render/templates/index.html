@@ -26,9 +26,19 @@
   </header>
   <main>
     <div class="card search-card">
-      <label class="search-label" for="search-input">Search sessions</label>
-      <input id="search-input" class="search-input" type="search" placeholder="Search across all sessions" autocomplete="off" spellcheck="false">
+      <form id="search-form" class="search-form" action="#" method="get">
+        <label class="search-label" for="search-input">Search sessions</label>
+        <div class="search-actions">
+          <input id="search-input" class="search-input" type="search" placeholder="Search across all sessions" autocomplete="off" spellcheck="false">
+          <button class="nav-btn" type="submit">Search</button>
+        </div>
+      </form>
       <p id="search-status" class="meta search-status"></p>
+      <div id="search-pagination" class="pagination search-pagination" hidden>
+        <button id="search-prev" class="nav-btn" type="button">⬅️ Prev</button>
+        <span id="search-page-meta" class="page-meta"></span>
+        <button id="search-next" class="nav-btn" type="button">Next ➡️</button>
+      </div>
       <ul id="search-results" class="list search-results"></ul>
     </div>
     <div class="card">
@@ -75,16 +85,21 @@
   </main>
   <script>
     (function () {
+      var form = document.getElementById("search-form");
       var input = document.getElementById("search-input");
       var results = document.getElementById("search-results");
       var status = document.getElementById("search-status");
-      if (!input || !results || !status) return;
+      var pagination = document.getElementById("search-pagination");
+      var prevButton = document.getElementById("search-prev");
+      var nextButton = document.getElementById("search-next");
+      var pageMeta = document.getElementById("search-page-meta");
+      if (!form || !input || !results || !status || !pagination || !prevButton || !nextButton || !pageMeta) return;
 
       var minChars = 2;
-      var debounceMs = 250;
-      var timer = null;
+      var pageLimit = 50;
       var controller = null;
-      var lastQuery = "";
+      var currentQuery = "";
+      var currentOffset = 0;
 
       function setStatus(message) {
         status.textContent = message || "";
@@ -93,6 +108,32 @@
       function clearResults(message) {
         results.innerHTML = "";
         setStatus(message);
+        pagination.hidden = true;
+        pageMeta.textContent = "";
+        prevButton.disabled = true;
+        nextButton.disabled = true;
+        prevButton.classList.add("disabled");
+        nextButton.classList.add("disabled");
+      }
+
+      function updatePagination(offset, total, count) {
+        if (!currentQuery || total <= count) {
+          pagination.hidden = true;
+          pageMeta.textContent = "";
+          prevButton.disabled = true;
+          nextButton.disabled = true;
+          prevButton.classList.add("disabled");
+          nextButton.classList.add("disabled");
+          return;
+        }
+        pagination.hidden = false;
+        var start = total === 0 ? 0 : offset + 1;
+        var end = offset + count;
+        pageMeta.textContent = "Showing " + start + "-" + end + " of " + total;
+        prevButton.disabled = offset <= 0;
+        nextButton.disabled = end >= total;
+        prevButton.classList.toggle("disabled", prevButton.disabled);
+        nextButton.classList.toggle("disabled", nextButton.disabled);
       }
 
       function highlightText(container, text, query) {
@@ -129,11 +170,16 @@
           if (query.length >= minChars) {
             setStatus("No results.");
           } else {
-            setStatus("Type at least " + minChars + " characters to search.");
+            setStatus("Type at least " + minChars + " characters and press Enter to search.");
           }
+          updatePagination(0, 0, 0);
           return;
         }
-        setStatus(data.results.length + " result" + (data.results.length === 1 ? "" : "s") + ".");
+        var offset = data.offset || 0;
+        var total = data.total || data.results.length;
+        var end = offset + data.results.length;
+        setStatus("Showing " + (offset + 1) + "-" + end + " of " + total + " result" + (total === 1 ? "" : "s") + ".");
+        updatePagination(offset, total, data.results.length);
         data.results.forEach(function (item) {
           var li = document.createElement("li");
           li.className = "session-list-item search-result";
@@ -224,13 +270,15 @@
         });
       }
 
-      function fetchResults(query) {
+      function fetchResults(query, offset) {
         if (controller) {
           controller.abort();
         }
         controller = new AbortController();
+        currentQuery = query;
+        currentOffset = offset;
         setStatus("Searching...");
-        fetch("/search?query=" + encodeURIComponent(query) + "&limit=50", {
+        fetch("/search?query=" + encodeURIComponent(query) + "&limit=" + pageLimit + "&offset=" + offset, {
           method: "GET",
           credentials: "same-origin",
           signal: controller.signal
@@ -240,6 +288,7 @@
             return response.json();
           })
           .then(function (data) {
+            currentOffset = data.offset || 0;
             renderResults(data, query);
           })
           .catch(function (error) {
@@ -248,23 +297,36 @@
           });
       }
 
-      input.addEventListener("input", function () {
+      form.addEventListener("submit", function (event) {
+        event.preventDefault();
         var query = input.value.trim();
-        if (query === lastQuery) return;
-        lastQuery = query;
-        if (timer) {
-          clearTimeout(timer);
-        }
         if (query.length < minChars) {
-          clearResults("Type at least " + minChars + " characters to search.");
+          currentQuery = "";
+          currentOffset = 0;
+          clearResults("Type at least " + minChars + " characters and press Enter to search.");
           return;
         }
-        timer = setTimeout(function () {
-          fetchResults(query);
-        }, debounceMs);
+        fetchResults(query, 0);
       });
 
-      clearResults("Type at least " + minChars + " characters to search.");
+      input.addEventListener("input", function () {
+        if (input.value.trim() !== "") return;
+        currentQuery = "";
+        currentOffset = 0;
+        clearResults("Type at least " + minChars + " characters and press Enter to search.");
+      });
+
+      prevButton.addEventListener("click", function () {
+        if (prevButton.disabled) return;
+        fetchResults(currentQuery, Math.max(0, currentOffset - pageLimit));
+      });
+
+      nextButton.addEventListener("click", function () {
+        if (nextButton.disabled) return;
+        fetchResults(currentQuery, currentOffset + pageLimit);
+      });
+
+      clearResults("Type at least " + minChars + " characters and press Enter to search.");
     })();
 
     (function () {

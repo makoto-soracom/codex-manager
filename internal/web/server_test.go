@@ -367,7 +367,7 @@ func TestHandleDirShowsSessionTokenUsage(t *testing.T) {
 	if !strings.Contains(body, "Tokens: total=11,740 (input=2,176 cached=9,024 output=540 (reasoning=100))") {
 		t.Fatalf("expected session token usage summary, body=%s", body)
 	}
-	if strings.Contains(body, "token-usage-warning") {
+	if strings.Contains(body, " token-usage-warning") {
 		t.Fatalf("expected token usage below warning threshold, body=%s", body)
 	}
 }

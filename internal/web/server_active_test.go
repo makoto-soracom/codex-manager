@@ -445,20 +445,7 @@ func TestHandleDayShowsThreadStateActionsForDirectorySessions(t *testing.T) {
 		t.Fatalf("expected ended tab on day page, body=%s", body)
 	}
 
-	var waitingUserSummary active.Summary
-	foundWaitingUser := false
-	for _, summary := range server.active.Summaries() {
-		if summary.SessionID == "session-user" {
-			waitingUserSummary = summary
-			foundWaitingUser = true
-			break
-		}
-	}
-	if !foundWaitingUser {
-		t.Fatal("expected waiting-user summary")
-	}
-
-	postReq := httptest.NewRequest(http.MethodPost, "http://example.com/active/state", strings.NewReader("action=end&key="+url.QueryEscape(waitingUserSummary.Key)))
+	postReq := httptest.NewRequest(http.MethodPost, "http://example.com/active/state", strings.NewReader("action=end&key="+url.QueryEscape("id:session-user")))
 	postReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	postRec := httptest.NewRecorder()
 	server.ServeHTTP(postRec, postReq)

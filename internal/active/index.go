@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path"
 	"sort"
@@ -214,6 +215,11 @@ func buildSummary(file sessions.SessionFile) (Summary, error) {
 	}, nil
 }
 
+// BuildSummary derives an active-thread summary for one session file.
+func BuildSummary(file sessions.SessionFile) (Summary, error) {
+	return buildSummary(file)
+}
+
 func summaryKey(file sessions.SessionFile) string {
 	if file.Meta != nil {
 		if id := strings.TrimSpace(file.Meta.ID); id != "" {
@@ -278,47 +284,48 @@ func scanActivity(file sessions.SessionFile) (activityInfo, error) {
 	}
 	defer f.Close()
 
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	reader := bufio.NewReader(f)
 
 	var lastActivity time.Time
 	lineCount := 0
 	waitState := WaitStateUser
 
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
-		}
-		lineCount++
+	for {
+		rawLine, err := reader.ReadBytes('\n')
+		if len(rawLine) > 0 {
+			line := strings.TrimSpace(string(rawLine))
+			if line != "" {
+				lineCount++
 
-		var env activityEnvelope
-		if err := json.Unmarshal([]byte(line), &env); err != nil {
-			continue
+				var env activityEnvelope
+				if err := json.Unmarshal([]byte(line), &env); err == nil {
+					if ts, ok := parseTimestamp(env.Timestamp); ok {
+						lastActivity = ts
+					}
+
+					if env.Type == "event_msg" {
+						var payload struct {
+							Type string `json:"type"`
+						}
+						if err := json.Unmarshal(env.Payload, &payload); err == nil {
+							switch payload.Type {
+							case "task_started":
+								waitState = WaitStateAgent
+							case "task_complete":
+								waitState = WaitStateUser
+							}
+						}
+					}
+				}
+			}
 		}
 
-		if ts, ok := parseTimestamp(env.Timestamp); ok {
-			lastActivity = ts
+		if err == io.EOF {
+			break
 		}
-
-		if env.Type != "event_msg" {
-			continue
+		if err != nil {
+			return activityInfo{}, err
 		}
-		var payload struct {
-			Type string `json:"type"`
-		}
-		if err := json.Unmarshal(env.Payload, &payload); err != nil {
-			continue
-		}
-		switch payload.Type {
-		case "task_started":
-			waitState = WaitStateAgent
-		case "task_complete":
-			waitState = WaitStateUser
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		return activityInfo{}, err
 	}
 
 	if lastActivity.IsZero() {
@@ -357,7 +364,7 @@ func parseTimestamp(value string) (time.Time, bool) {
 }
 
 func extractSnippets(path string, meta *sessions.SessionMeta) (Snippet, Snippet, bool, bool, error) {
-	session, err := sessions.ParseSession(path)
+	snippets, err := sessions.ExtractLastConversationSnippets(path)
 	if err != nil {
 		return Snippet{}, Snippet{}, false, false, err
 	}
@@ -370,7 +377,7 @@ func extractSnippets(path string, meta *sessions.SessionMeta) (Snippet, Snippet,
 		Title:        "Agent",
 		SpeakerClass: "agent",
 	}
-	if session.Meta != nil && session.Meta.IsSubagentThread() {
+	if snippets.Meta != nil && snippets.Meta.IsSubagentThread() {
 		userSnippet.Title = "Agent"
 		userSnippet.SpeakerClass = "agent"
 		assistantSnippet.Title = "Subagent"
@@ -382,26 +389,11 @@ func extractSnippets(path string, meta *sessions.SessionMeta) (Snippet, Snippet,
 		assistantSnippet.SpeakerClass = "subagent"
 	}
 
-	hasUser := false
-	lastUserIndex := -1
-	lastAssistantIndex := -1
-	for index, item := range session.Items {
-		switch item.Role {
-		case "user":
-			if sessions.IsAutoContextUserMessage(item.Content) {
-				continue
-			}
-			hasUser = true
-			userSnippet.Text = item.Content
-			lastUserIndex = index
-		case "assistant":
-			assistantSnippet.Text = item.Content
-			lastAssistantIndex = index
-		}
-	}
+	userSnippet.Text = snippets.LastUser
+	assistantSnippet.Text = snippets.LastAssistant
 	userSnippet.Text = snippetFromContent(userSnippet.Text, 180)
 	assistantSnippet.Text = snippetFromContent(assistantSnippet.Text, 180)
-	return userSnippet, assistantSnippet, hasUser, lastAssistantIndex > lastUserIndex, nil
+	return userSnippet, assistantSnippet, snippets.HasUser, snippets.AssistantAfterLastUser, nil
 }
 
 func snippetFromContent(value string, max int) string {

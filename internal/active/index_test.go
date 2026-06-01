@@ -3,6 +3,7 @@ package active
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"codex-manager/internal/sessions"
@@ -123,6 +124,47 @@ func TestIndexRefreshFromUsesThinkingPlaceholderWhenLatestUserHasNoAssistantRepl
 	}
 	if summary.LastAssistantSnippet.Text != thinkingPlaceholder {
 		t.Fatalf("expected thinking placeholder, got %q", summary.LastAssistantSnippet.Text)
+	}
+}
+
+func TestIndexRefreshFromHandlesLongJSONLLines(t *testing.T) {
+	root := t.TempDir()
+	sessionsDir := filepath.Join(root, "sessions")
+	dateDir := filepath.Join(sessionsDir, "2026", "03", "20")
+	if err := os.MkdirAll(dateDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	filePath := filepath.Join(dateDir, "long-line.jsonl")
+	longOutput := strings.Repeat("x", 4*1024*1024+1)
+	data := "" +
+		"{\"timestamp\":\"2026-03-20T01:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"session-long-line\",\"timestamp\":\"2026-03-20T01:00:00Z\",\"cwd\":\"/tmp/project\",\"originator\":\"cli\",\"cli_version\":\"0.1\"}}\n" +
+		"{\"timestamp\":\"2026-03-20T01:00:05Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"## My request for Codex:\\nHandle long lines\"}]}}\n" +
+		"{\"timestamp\":\"2026-03-20T01:00:10Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"function_call_output\",\"call_id\":\"call_long\",\"output\":\"" + longOutput + "\"}}\n" +
+		"{\"timestamp\":\"2026-03-20T01:00:20Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\"}}\n"
+	if err := os.WriteFile(filePath, []byte(data), 0o600); err != nil {
+		t.Fatalf("write session: %v", err)
+	}
+
+	idx := sessions.NewIndex(sessionsDir)
+	if err := idx.Refresh(); err != nil {
+		t.Fatalf("refresh sessions: %v", err)
+	}
+
+	activeIdx := NewIndex()
+	if err := activeIdx.RefreshFrom(idx); err != nil {
+		t.Fatalf("refresh active index: %v", err)
+	}
+
+	summaries := activeIdx.Summaries()
+	if len(summaries) != 1 {
+		t.Fatalf("expected 1 summary, got %d", len(summaries))
+	}
+	if summaries[0].WaitState != WaitStateAgent {
+		t.Fatalf("expected agent wait state, got %q", summaries[0].WaitState)
+	}
+	if summaries[0].LastActivityAt.Format(timeLayout) != "2026-03-20T01:00:20Z" {
+		t.Fatalf("unexpected last activity: %s", summaries[0].LastActivityAt.Format(timeLayout))
 	}
 }
 

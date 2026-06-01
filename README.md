@@ -61,11 +61,24 @@ Visit:
 
 Key pages:
 - `/` date/directory browser
+- `/{session-id}` redirect by exact session ID
 - `/active` active thread list (default: today in your browser time zone)
+- `/rate-limits` today's token_count rate-limit rows, sorted by timestamp
 - `/notifications` received webhook notifications
 
 ## Autostart (systemd --user)
 If your environment supports user services (WSL with systemd, Linux desktops), you can keep it running.
+
+For WSL, systemd must be enabled in `/etc/wsl.conf`:
+```ini
+[boot]
+systemd=true
+```
+
+After changing `/etc/wsl.conf`, restart WSL from Windows:
+```powershell
+wsl --shutdown
+```
 
 1) Build the binary:
 ```bash
@@ -73,7 +86,10 @@ make build
 ```
 
 2) Create `~/.config/systemd/user/codex-manager.service`:
-```ini
+```bash
+mkdir -p ~/.config/systemd/user
+
+cat > ~/.config/systemd/user/codex-manager.service <<'EOF'
 [Unit]
 Description=Codex Manager
 After=network.target
@@ -87,6 +103,7 @@ RestartSec=2
 
 [Install]
 WantedBy=default.target
+EOF
 ```
 `%h` expands to your home directory in systemd user services.
 
@@ -96,10 +113,20 @@ systemctl --user daemon-reload
 systemctl --user enable --now codex-manager
 ```
 
+Check status:
+```bash
+systemctl --user status codex-manager --no-pager
+```
+
 Rebuild + restart after code changes:
 ```bash
 make build
 systemctl --user restart codex-manager
+```
+
+If `systemctl --user` cannot connect to the user bus in WSL, enable linger once, restart WSL, and try again:
+```bash
+sudo loginctl enable-linger "$USER"
 ```
 
 ## Flags

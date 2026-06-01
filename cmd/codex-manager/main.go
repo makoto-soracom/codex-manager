@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"runtime/debug"
 	"strings"
 	"time"
 
@@ -69,6 +70,7 @@ func main() {
 	if err := searchIdx.RefreshFrom(idx); err != nil {
 		log.Printf("initial search index build failed: %v", err)
 	}
+	debug.FreeOSMemory()
 
 	go func() {
 		ticker := time.NewTicker(cfg.RescanInterval)
@@ -89,6 +91,7 @@ func main() {
 			if err := searchIdx.RefreshFrom(idx); err != nil {
 				log.Printf("search reindex failed: %v", err)
 			}
+			debug.FreeOSMemory()
 		}
 	}()
 

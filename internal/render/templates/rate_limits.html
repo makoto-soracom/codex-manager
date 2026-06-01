@@ -1,0 +1,47 @@
+{{ define "rate_limits" }}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Rate limits - Codex Manager</title>
+  {{ template "style" . }}
+</head>
+<body class="{{ .ThemeClass }}">
+  <header>
+    {{ template "top_nav" . }}
+    <h1 class="page-title">Rate limits</h1>
+    <p class="subtitle">token_count events for {{ .Date }}, sorted by timestamp.</p>
+    <div class="pagination">
+      <a class="nav-btn" href="/rate-limits?date={{ .PrevDate }}">⬅️ {{ .PrevDate }}</a>
+      <span class="page-meta">{{ .Date }}</span>
+      <a class="nav-btn" href="/rate-limits?date={{ .NextDate }}">{{ .NextDate }} ➡️</a>
+    </div>
+  </header>
+  <main>
+    {{ if .Entries }}
+    <div class="card">
+      <ul class="list link-list rate-limit-list">
+        {{ range .Entries }}
+        <li class="rate-limit-item" style="{{ .SessionColorStyle }}">
+          <a class="link-item-link rate-limit-link" href="{{ .Link }}">
+            <span class="rate-limit-row">
+              <span>{{ .Timestamp }}</span>
+              <span class="meta">primary (used={{ .PrimaryUsedPercent }}%, until={{ .PrimaryReset }})</span>
+              <span class="meta">secondary (used={{ .SecondaryUsedPercent }}%, until={{ .SecondaryReset }})</span>
+              <span class="meta">metadata ({{ .Model }}, <span class="mono-link">{{ .SessionID }}</span>)</span>
+            </span>
+          </a>
+        </li>
+        {{ end }}
+      </ul>
+    </div>
+    {{ else }}
+    <div class="card">
+      <p class="meta">{{ .EmptyMessage }}</p>
+    </div>
+    {{ end }}
+  </main>
+</body>
+</html>
+{{ end }}

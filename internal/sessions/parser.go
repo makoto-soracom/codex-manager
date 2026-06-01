@@ -188,6 +188,14 @@ func (usage TokenUsageDisplay) FormatTotal() string {
 	return "total=" + formatTokenCount(usage.TotalTokens)
 }
 
+func (usage TokenUsageDisplay) FormatTotalBreakdown() string {
+	return "total=" + formatTokenCount(usage.TotalTokens) +
+		" (input=" + formatTokenCount(usage.InputTokens) +
+		" cached=" + formatTokenCount(usage.CachedInputTokens) +
+		" output=" + formatTokenCount(usage.OutputTokens) +
+		" (reasoning=" + formatTokenCount(usage.ReasoningOutputTokens) + "))"
+}
+
 func (usage TokenUsageDisplay) HasUsage() bool {
 	return usage.InputTokens > 0 ||
 		usage.CachedInputTokens > 0 ||
@@ -413,13 +421,13 @@ func parseResponseItem(env envelope, lineText string, lineNum int, session *Sess
 		item.Class = roleClass("tool")
 		item.Content = renderFunctionCallOutputContent(payload.CallID, payload.Output)
 	case "message":
-		if payload.Role != "user" && payload.Role != "assistant" {
+		if !isRenderableMessageRole(payload.Role) {
 			return nil
 		}
 		if payload.Role == "user" {
 			item.Title = "User"
 		} else {
-			item.Title = "Agent"
+			item.Title = titleForRole(payload.Role)
 		}
 		item.Content = extractContentText(payload.Content)
 		if payload.Role == "user" {
@@ -494,7 +502,7 @@ func parseDirectMessage(lineText string, lineNum int, session *Session) *RenderI
 	if err := json.Unmarshal([]byte(lineText), &payload); err != nil {
 		return nil
 	}
-	if payload.Role != "user" && payload.Role != "assistant" {
+	if !isRenderableMessageRole(payload.Role) {
 		return nil
 	}
 	item := RenderItem{
@@ -1485,6 +1493,8 @@ func titleForRole(role string) string {
 		return "Agent"
 	case "subagent":
 		return "Subagent"
+	case "developer":
+		return "Developer"
 	default:
 		return "Message"
 	}
@@ -1502,10 +1512,21 @@ func roleClass(role string) string {
 		return "role-system"
 	case "tool":
 		return "role-tool"
+	case "developer":
+		return "role-developer"
 	case "error":
 		return "role-error"
 	default:
 		return "role-unknown"
+	}
+}
+
+func isRenderableMessageRole(role string) bool {
+	switch strings.ToLower(strings.TrimSpace(role)) {
+	case "user", "assistant", "developer":
+		return true
+	default:
+		return false
 	}
 }
 

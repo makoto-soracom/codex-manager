@@ -4,15 +4,413 @@ import (
 	"bytes"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"codex-manager/internal/render"
 	"codex-manager/internal/repooverride"
 	"codex-manager/internal/sessions"
 )
+
+func TestHandleIndexRedirectsToExplicitView(t *testing.T) {
+	server := NewServer(nil, nil, nil, "", "", "", 3)
+
+	tests := []struct {
+		name     string
+		target   string
+		wantView string
+		wantHeat string
+		wantCode int
+	}{
+		{
+			name:     "bare root",
+			target:   "http://example.com/",
+			wantView: "dir",
+			wantCode: http.StatusFound,
+		},
+		{
+			name:     "heat only",
+			target:   "http://example.com/?heat=today",
+			wantView: "dir",
+			wantHeat: "today",
+			wantCode: http.StatusFound,
+		},
+		{
+			name:     "invalid view",
+			target:   "http://example.com/?view=unknown",
+			wantView: "date",
+			wantCode: http.StatusFound,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, tt.target, nil)
+			rec := httptest.NewRecorder()
+			server.ServeHTTP(rec, req)
+
+			if rec.Code != tt.wantCode {
+				t.Fatalf("status: got %d body %s", rec.Code, rec.Body.String())
+			}
+			location := rec.Header().Get("Location")
+			parsed, err := url.Parse(location)
+			if err != nil {
+				t.Fatalf("parse location %q: %v", location, err)
+			}
+			if parsed.Path != "/" {
+				t.Fatalf("expected root redirect path, got %q", parsed.Path)
+			}
+			values := parsed.Query()
+			if got := values.Get("view"); got != tt.wantView {
+				t.Fatalf("expected view %q, got %q in %q", tt.wantView, got, location)
+			}
+			if got := values.Get("heat"); got != tt.wantHeat {
+				t.Fatalf("expected heat %q, got %q in %q", tt.wantHeat, got, location)
+			}
+		})
+	}
+}
+
+func TestServeHTTPFaviconAssets(t *testing.T) {
+	server := NewServer(nil, nil, nil, "", "", "", 3)
+
+	req := httptest.NewRequest(http.MethodGet, "http://example.com/favicon.ico", nil)
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: got %d body %s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Content-Type"); got != "image/x-icon" {
+		t.Fatalf("content type: got %q", got)
+	}
+	if body := rec.Body.Bytes(); len(body) < 4 || !bytes.Equal(body[:4], []byte{0x00, 0x00, 0x01, 0x00}) {
+		t.Fatalf("expected ICO header, got % x", body[:min(len(body), 8)])
+	}
+
+	pngReq := httptest.NewRequest(http.MethodGet, "http://example.com/codex-manager-256.png", nil)
+	pngRec := httptest.NewRecorder()
+	server.ServeHTTP(pngRec, pngReq)
+
+	if pngRec.Code != http.StatusOK {
+		t.Fatalf("png status: got %d body %s", pngRec.Code, pngRec.Body.String())
+	}
+	if got := pngRec.Header().Get("Content-Type"); got != "image/png" {
+		t.Fatalf("png content type: got %q", got)
+	}
+	if body := pngRec.Body.Bytes(); len(body) < 8 || !bytes.Equal(body[:8], []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'}) {
+		t.Fatalf("expected PNG header, got % x", body[:min(len(body), 8)])
+	}
+}
+
+func TestHandleSessionIDRedirect(t *testing.T) {
+	sessionsDir := t.TempDir()
+	datePath := filepath.Join(sessionsDir, "2026", "05", "26")
+	if err := os.MkdirAll(datePath, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	sessionID := "019e647f-541f-7161-865d-edc7d9dab4a4"
+	fileName := "rollout-2026-05-26T20-50-55-019e647f-541f-7161-865d-edc7d9dab4a4.jsonl"
+	sessionPath := filepath.Join(datePath, fileName)
+	sessionData := "" +
+		"{\"timestamp\":\"2026-05-26T20:50:55Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"" + sessionID + "\",\"timestamp\":\"2026-05-26T20:50:55Z\",\"cwd\":\"/tmp\",\"originator\":\"cli\",\"cli_version\":\"0.1\"}}\n" +
+		"{\"timestamp\":\"2026-05-26T20:50:56Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"hello\"}]}}\n"
+	if err := os.WriteFile(sessionPath, []byte(sessionData), 0o600); err != nil {
+		t.Fatalf("write session: %v", err)
+	}
+
+	idx := sessions.NewIndex(sessionsDir)
+	if err := idx.Refresh(); err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+
+	server := NewServer(idx, nil, nil, sessionsDir, "", "", 3)
+	wantLocation := "/2026/05/26/" + fileName + "#last-item"
+	req := httptest.NewRequest(http.MethodGet, "http://example.com/"+sessionID, nil)
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusFound {
+		t.Fatalf("status: got %d body %s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Location"); got != wantLocation {
+		t.Fatalf("expected redirect %q, got %q", wantLocation, got)
+	}
+
+	tests := []struct {
+		name   string
+		target string
+	}{
+		{
+			name:   "unknown bare id",
+			target: "http://example.com/not-found",
+		},
+		{
+			name:   "explicit session path is not an alias",
+			target: "http://example.com/session/" + sessionID,
+		},
+		{
+			name:   "explicit session query is not an alias",
+			target: "http://example.com/session?id=" + url.QueryEscape(sessionID),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, tt.target, nil)
+			rec := httptest.NewRecorder()
+			server.ServeHTTP(rec, req)
+			if rec.Code != http.StatusNotFound {
+				t.Fatalf("expected 404 for %s, got %d", tt.target, rec.Code)
+			}
+		})
+	}
+}
+
+func TestHandleRateLimitsListsTodayEventsSortedByTimestamp(t *testing.T) {
+	sessionsDir := t.TempDir()
+	datePath := filepath.Join(sessionsDir, "2026", "06", "01")
+	if err := os.MkdirAll(datePath, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	olderName := "rollout-2026-06-01T13-44-00-019e8158-f053-7522-bcc2-8c10c4b18105.jsonl"
+	olderPath := filepath.Join(datePath, olderName)
+	olderData := "" +
+		"{\"timestamp\":\"2026-06-01T04:44:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"019e8158-f053-7522-bcc2-8c10c4b18105\",\"timestamp\":\"2026-06-01T04:44:00Z\",\"cwd\":\"/tmp\",\"originator\":\"cli\",\"cli_version\":\"0.1\"}}\n" +
+		"{\"timestamp\":\"2026-06-01T04:44:01Z\",\"type\":\"turn_context\",\"payload\":{\"model\":\"gpt-5.5\"}}\n" +
+		"{\"timestamp\":\"2026-06-01T04:44:57.945Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"rate_limits\":{\"limit_id\":\"codex\",\"primary\":{\"used_percent\":98.0,\"resets_at\":1780292580},\"secondary\":{\"used_percent\":15.0,\"resets_at\":1780879380},\"plan_type\":\"team\"}}}\n"
+	if err := os.WriteFile(olderPath, []byte(olderData), 0o600); err != nil {
+		t.Fatalf("write older session: %v", err)
+	}
+
+	newerName := "rollout-2026-06-01T13-45-00-019e8158-f053-7522-bcc2-8c10c4b18106.jsonl"
+	newerPath := filepath.Join(datePath, newerName)
+	newerData := "" +
+		"{\"timestamp\":\"2026-06-01T04:45:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"019e8158-f053-7522-bcc2-8c10c4b18106\",\"timestamp\":\"2026-06-01T04:45:00Z\",\"cwd\":\"/tmp\",\"originator\":\"cli\",\"cli_version\":\"0.1\"}}\n" +
+		"{\"timestamp\":\"2026-06-01T04:45:01Z\",\"type\":\"turn_context\",\"payload\":{\"model\":\"gpt-5\"}}\n" +
+		"{\"timestamp\":\"2026-06-01T04:43:57.945Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"rate_limits\":{\"limit_id\":\"codex\",\"primary\":{\"used_percent\":16.0,\"resets_at\":1780292580},\"secondary\":{\"used_percent\":1.0,\"resets_at\":1780879380},\"plan_type\":\"team\"}}}\n"
+	if err := os.WriteFile(newerPath, []byte(newerData), 0o600); err != nil {
+		t.Fatalf("write newer session: %v", err)
+	}
+
+	idx := sessions.NewIndex(sessionsDir)
+	if err := idx.Refresh(); err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+	renderer, err := render.New()
+	if err != nil {
+		t.Fatalf("renderer: %v", err)
+	}
+
+	server := NewServer(idx, nil, renderer, sessionsDir, "", "", 3)
+	req := httptest.NewRequest(http.MethodGet, "http://example.com/rate-limits?date=2026-06-01", nil)
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: got %d body %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	first := strings.Index(body, "2026-06-01T04:43:57.945Z")
+	second := strings.Index(body, "2026-06-01T04:44:57.945Z")
+	if first < 0 || second < 0 || first > second {
+		t.Fatalf("expected timestamps sorted ascending, body=%s", body)
+	}
+	if !strings.Contains(body, "primary (used=98.0%, until=") || !strings.Contains(body, "secondary (used=15.0%, until=") ||
+		!strings.Contains(body, "primary (used=16.0%, until=") || !strings.Contains(body, "secondary (used=1.0%, until=") {
+		t.Fatalf("expected primary and secondary used_percent values, body=%s", body)
+	}
+	if !strings.Contains(body, "metadata (gpt-5.5,") || !strings.Contains(body, "metadata (gpt-5,") {
+		t.Fatalf("expected metadata values, body=%s", body)
+	}
+	if !strings.Contains(body, "border-left-color: hsl(") {
+		t.Fatalf("expected session color styles, body=%s", body)
+	}
+	if !strings.Contains(body, "gpt-5.5") || !strings.Contains(body, "gpt-5") {
+		t.Fatalf("expected model values, body=%s", body)
+	}
+	if !strings.Contains(body, `href="/2026/06/01/`+olderName+`#line-3"`) {
+		t.Fatalf("expected line anchor link for token_count event, body=%s", body)
+	}
+	if !strings.Contains(body, "019e8158-f053-7522-bcc2-8c10c4b18105") {
+		t.Fatalf("expected session id, body=%s", body)
+	}
+}
+
+func TestAssignRateLimitSessionColorsUsesDistinctStylePerSessionID(t *testing.T) {
+	entries := []rateLimitEventView{
+		{SessionID: "session-a", Link: "/a"},
+		{SessionID: "session-b", Link: "/b"},
+		{SessionID: "session-a", Link: "/a2"},
+	}
+	assignRateLimitSessionColors(entries)
+	if entries[0].SessionColorStyle == "" || entries[1].SessionColorStyle == "" {
+		t.Fatalf("expected color styles, got %#v", entries)
+	}
+	if entries[0].SessionColorStyle == entries[1].SessionColorStyle {
+		t.Fatalf("expected distinct session styles, got %q", entries[0].SessionColorStyle)
+	}
+	if entries[0].SessionColorStyle != entries[2].SessionColorStyle {
+		t.Fatalf("expected same session style, got %q and %q", entries[0].SessionColorStyle, entries[2].SessionColorStyle)
+	}
+}
+
+func TestHandleSessionRendersContextNavigation(t *testing.T) {
+	sessionsDir := t.TempDir()
+	datePath := filepath.Join(sessionsDir, "2026", "05", "11")
+	if err := os.MkdirAll(datePath, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	sessionPath := filepath.Join(datePath, "session.jsonl")
+	sessionData := "" +
+		"{\"timestamp\":\"2026-05-11T22:44:48Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"session-1\",\"timestamp\":\"2026-05-11T22:44:48Z\",\"cwd\":\"/home/makoto/.codex\",\"originator\":\"cli\",\"cli_version\":\"0.1\"}}\n" +
+		"{\"timestamp\":\"2026-05-11T22:44:59Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"developer\",\"content\":[{\"type\":\"input_text\",\"text\":\"<permissions instructions>\\nvisible when expanded\\n</permissions instructions>\"}]}}\n" +
+		"{\"timestamp\":\"2026-05-11T22:45:00Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"## My request for Codex:\\nCheck links\"}]}}\n"
+	if err := os.WriteFile(sessionPath, []byte(sessionData), 0o600); err != nil {
+		t.Fatalf("write session: %v", err)
+	}
+	modTime := time.Date(2026, 5, 11, 22, 54, 39, 0, time.Local)
+	if err := os.Chtimes(sessionPath, modTime, modTime); err != nil {
+		t.Fatalf("set session mtime: %v", err)
+	}
+
+	idx := sessions.NewIndex(sessionsDir)
+	if err := idx.Refresh(); err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+
+	renderer, err := render.New()
+	if err != nil {
+		t.Fatalf("renderer: %v", err)
+	}
+
+	server := NewServer(idx, nil, renderer, sessionsDir, "", "", 3)
+	req := httptest.NewRequest(http.MethodGet, "http://example.com/2026/05/11/session.jsonl", nil)
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: got %d body %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `rel="icon" href="/favicon.ico"`) || !strings.Contains(body, `href="/codex-manager-256.png"`) {
+		t.Fatalf("expected favicon links, body=%s", body)
+	}
+	if !strings.Contains(body, `href="/dir?cwd=%2Fhome%2Fmakoto%2F.codex"`) || !strings.Contains(body, "All Dates in this directory") {
+		t.Fatalf("expected directory context link, body=%s", body)
+	}
+	if !strings.Contains(body, `href="/2026/05/11/"`) || !strings.Contains(body, "All Directories on this day") {
+		t.Fatalf("expected day context link, body=%s", body)
+	}
+	if strings.Contains(body, "All directories this day") || strings.Contains(body, "All days in this directory") {
+		t.Fatalf("expected old context link labels to be removed, body=%s", body)
+	}
+	if !strings.Contains(body, "Last updated at: 2026-05-11 22:54:39") || !strings.Contains(body, "(JSONL: ") {
+		t.Fatalf("expected file update context, body=%s", body)
+	}
+	if !strings.Contains(body, `<summary class="meta">Developer instructions</summary>`) || !strings.Contains(body, "visible when expanded") {
+		t.Fatalf("expected collapsed developer instructions, body=%s", body)
+	}
+	if strings.Contains(body, "&lt;permissions instructions&gt;") || strings.Contains(body, "&lt;/permissions instructions&gt;") {
+		t.Fatalf("expected permissions wrapper tags to be hidden, body=%s", body)
+	}
+	if strings.Contains(body, "raw HTML omitted") {
+		t.Fatalf("expected developer prompt tags to render literally, body=%s", body)
+	}
+}
+
+func TestHandleDirShowsSessionTokenUsage(t *testing.T) {
+	sessionsDir := t.TempDir()
+	datePath := filepath.Join(sessionsDir, "2026", "03", "18")
+	if err := os.MkdirAll(datePath, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	sessionPath := filepath.Join(datePath, "token-usage.jsonl")
+	sessionData := "" +
+		"{\"timestamp\":\"2026-03-18T00:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"session-token-usage\",\"timestamp\":\"2026-03-18T00:00:00Z\",\"cwd\":\"/home/makoto/codex\",\"originator\":\"cli\",\"cli_version\":\"0.1\"}}\n" +
+		"{\"timestamp\":\"2026-03-18T00:00:01Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"## My request for Codex:\\nShow usage\"}]}}\n" +
+		"{\"timestamp\":\"2026-03-18T00:00:02Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"total_token_usage\":{\"input_tokens\":10000,\"cached_input_tokens\":8000,\"output_tokens\":500,\"reasoning_output_tokens\":100,\"total_tokens\":10500},\"last_token_usage\":{\"input_tokens\":1000,\"cached_input_tokens\":512,\"output_tokens\":10,\"reasoning_output_tokens\":0,\"total_tokens\":1010},\"model_context_window\":258400},\"rate_limits\":{\"limit_id\":\"codex\",\"plan_type\":\"team\"}}}\n" +
+		"{\"timestamp\":\"2026-03-18T00:00:03Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"Done\"}]}}\n" +
+		"{\"timestamp\":\"2026-03-18T00:00:04Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"total_token_usage\":{\"input_tokens\":11200,\"cached_input_tokens\":9024,\"output_tokens\":540,\"reasoning_output_tokens\":100,\"total_tokens\":11740},\"last_token_usage\":{\"input_tokens\":1200,\"cached_input_tokens\":1024,\"output_tokens\":40,\"reasoning_output_tokens\":0,\"total_tokens\":1240},\"model_context_window\":258400},\"rate_limits\":{\"limit_id\":\"codex\",\"plan_type\":\"team\"}}}\n"
+	if err := os.WriteFile(sessionPath, []byte(sessionData), 0o600); err != nil {
+		t.Fatalf("write session: %v", err)
+	}
+
+	idx := sessions.NewIndex(sessionsDir)
+	if err := idx.Refresh(); err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+	renderer, err := render.New()
+	if err != nil {
+		t.Fatalf("renderer: %v", err)
+	}
+
+	server := NewServer(idx, nil, renderer, sessionsDir, "", "", 3)
+	req := httptest.NewRequest(http.MethodGet, "http://example.com/dir?cwd="+url.QueryEscape("/home/makoto/codex"), nil)
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: got %d body %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "Sessions for /home/makoto/codex") {
+		t.Fatalf("expected directory page, body=%s", body)
+	}
+	if !strings.Contains(body, "Tokens: total=11,740 (input=2,176 cached=9,024 output=540 (reasoning=100))") {
+		t.Fatalf("expected session token usage summary, body=%s", body)
+	}
+	if strings.Contains(body, "token-usage-warning") {
+		t.Fatalf("expected token usage below warning threshold, body=%s", body)
+	}
+}
+
+func TestHandleDirHighlightsHighInputCachedTokenUsage(t *testing.T) {
+	sessionsDir := t.TempDir()
+	datePath := filepath.Join(sessionsDir, "2026", "03", "18")
+	if err := os.MkdirAll(datePath, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	sessionPath := filepath.Join(datePath, "high-token-usage.jsonl")
+	sessionData := "" +
+		"{\"timestamp\":\"2026-03-18T00:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"session-high-token-usage\",\"timestamp\":\"2026-03-18T00:00:00Z\",\"cwd\":\"/home/makoto/codex\",\"originator\":\"cli\",\"cli_version\":\"0.1\"}}\n" +
+		"{\"timestamp\":\"2026-03-18T00:00:01Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"## My request for Codex:\\nShow high usage\"}]}}\n" +
+		"{\"timestamp\":\"2026-03-18T00:00:02Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"total_token_usage\":{\"input_tokens\":731161,\"cached_input_tokens\":636928,\"output_tokens\":5875,\"reasoning_output_tokens\":1834,\"total_tokens\":737036},\"last_token_usage\":{\"input_tokens\":731161,\"cached_input_tokens\":636928,\"output_tokens\":5875,\"reasoning_output_tokens\":1834,\"total_tokens\":737036},\"model_context_window\":258400},\"rate_limits\":{\"limit_id\":\"codex\",\"plan_type\":\"team\"}}}\n"
+	if err := os.WriteFile(sessionPath, []byte(sessionData), 0o600); err != nil {
+		t.Fatalf("write session: %v", err)
+	}
+
+	idx := sessions.NewIndex(sessionsDir)
+	if err := idx.Refresh(); err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+	renderer, err := render.New()
+	if err != nil {
+		t.Fatalf("renderer: %v", err)
+	}
+
+	server := NewServer(idx, nil, renderer, sessionsDir, "", "", 3)
+	req := httptest.NewRequest(http.MethodGet, "http://example.com/dir?cwd="+url.QueryEscape("/home/makoto/codex"), nil)
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: got %d body %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	want := `<span class="token-usage token-usage-warning" title="Warning: input + cached exceeds 272KB">Tokens: total=737,036 (input=94,233 cached=636,928 output=5,875 (reasoning=1,834))</span>`
+	if !strings.Contains(body, want) {
+		t.Fatalf("expected high token usage warning %q, body=%s", want, body)
+	}
+}
 
 func TestBuildSessionViewLinksSubagentNotification(t *testing.T) {
 	sessionsDir := t.TempDir()
@@ -109,6 +507,7 @@ func TestBuildSessionViewShowsSelectedResponseItemsAndSkipsEncryptedOnlyReasonin
 	sessionPath := filepath.Join(datePath, "response-items.jsonl")
 	sessionData := "" +
 		"{\"timestamp\":\"2026-03-18T00:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"session-1\",\"timestamp\":\"2026-03-18T00:00:00Z\",\"cwd\":\"/tmp\",\"originator\":\"cli\",\"cli_version\":\"0.1\"}}\n" +
+		"{\"timestamp\":\"2026-03-18T00:00:00.500Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"developer\",\"content\":[{\"type\":\"input_text\",\"text\":\"<permissions instructions>\\nshow this prompt\\n</permissions instructions>\"}]}}\n" +
 		"{\"timestamp\":\"2026-03-18T00:00:01Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"web_search_call\",\"status\":\"completed\",\"action\":{\"type\":\"search\",\"query\":\"Codex CLI notify hook\",\"queries\":[\"Codex CLI notify hook\",\"OpenAI Codex notifications\"]}}}\n" +
 		"{\"timestamp\":\"2026-03-18T00:00:02Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"custom_tool_call_output\",\"call_id\":\"call_patch\",\"output\":\"{\\\"output\\\":\\\"Success. Updated the following files:\\nM /tmp/file.txt\\n\\\",\\\"metadata\\\":{\\\"exit_code\\\":0}}\"}}\n" +
 		"{\"timestamp\":\"2026-03-18T00:00:03Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"ghost_snapshot\",\"ghost_commit\":{\"id\":\"abc123\",\"parent\":\"def456\",\"preexisting_untracked_files\":[],\"preexisting_untracked_dirs\":[]}}}\n" +
@@ -129,23 +528,41 @@ func TestBuildSessionViewShowsSelectedResponseItemsAndSkipsEncryptedOnlyReasonin
 		t.Fatalf("buildSessionView: %v", err)
 	}
 
-	if len(view.Items) != 4 {
-		t.Fatalf("expected 4 visible items, got %d", len(view.Items))
+	if len(view.Items) != 5 {
+		t.Fatalf("expected 5 visible items, got %d", len(view.Items))
 	}
-	if view.Items[0].Subtype != "web_search_call" || !strings.Contains(view.Items[0].Content, "Expanded queries") {
-		t.Fatalf("expected visible web search item, got %#v", view.Items[0])
+	if view.Items[0].Role != "developer" || view.Items[0].RoleLabel != "developer" || view.Items[0].Title != "Developer" {
+		t.Fatalf("expected visible developer prompt item, got %#v", view.Items[0])
 	}
-	if view.Items[1].Subtype != "custom_tool_call_output" || !strings.Contains(view.Items[1].Content, "Success. Updated the following files:") {
-		t.Fatalf("expected visible custom tool output item, got %#v", view.Items[1])
+	if !strings.Contains(view.Items[0].Class, "role-developer") || !strings.Contains(view.Items[0].Class, "speaker-developer") {
+		t.Fatalf("expected developer classes, got %q", view.Items[0].Class)
 	}
-	if strings.Contains(string(view.Items[1].HTML), "<pre") {
-		t.Fatalf("expected extracted custom tool output to avoid pre block, got %s", view.Items[1].HTML)
+	if !strings.Contains(view.Items[0].Content, "show this prompt") {
+		t.Fatalf("expected developer prompt content, got %q", view.Items[0].Content)
 	}
-	if view.Items[2].Subtype != "ghost_snapshot" || !strings.Contains(view.Items[2].Content, "abc123") {
-		t.Fatalf("expected visible ghost snapshot item, got %#v", view.Items[2])
+	if !view.Items[0].CollapsedPrompt || view.Items[0].CollapsedPromptLabel != "Developer instructions" {
+		t.Fatalf("expected developer prompt to be collapsed, got %#v", view.Items[0])
 	}
-	if view.Items[3].Subtype != "reasoning" || view.Items[3].Content != "Keep this" {
-		t.Fatalf("expected only non-empty reasoning to remain, got %#v", view.Items[3])
+	if strings.Contains(string(view.Items[0].HTML), "&lt;permissions instructions&gt;") || strings.Contains(string(view.Items[0].HTML), "&lt;/permissions instructions&gt;") {
+		t.Fatalf("expected permissions wrapper tags to be hidden, got %s", view.Items[0].HTML)
+	}
+	if !strings.Contains(string(view.Items[0].HTML), "show this prompt") || strings.Contains(string(view.Items[0].HTML), "raw HTML omitted") {
+		t.Fatalf("expected developer prompt body to render literally, got %s", view.Items[0].HTML)
+	}
+	if view.Items[1].Subtype != "web_search_call" || !strings.Contains(view.Items[1].Content, "Expanded queries") {
+		t.Fatalf("expected visible web search item, got %#v", view.Items[1])
+	}
+	if view.Items[2].Subtype != "custom_tool_call_output" || !strings.Contains(view.Items[2].Content, "Success. Updated the following files:") {
+		t.Fatalf("expected visible custom tool output item, got %#v", view.Items[2])
+	}
+	if strings.Contains(string(view.Items[2].HTML), "<pre") {
+		t.Fatalf("expected extracted custom tool output to avoid pre block, got %s", view.Items[2].HTML)
+	}
+	if view.Items[3].Subtype != "ghost_snapshot" || !strings.Contains(view.Items[3].Content, "abc123") {
+		t.Fatalf("expected visible ghost snapshot item, got %#v", view.Items[3])
+	}
+	if view.Items[4].Subtype != "reasoning" || view.Items[4].Content != "Keep this" {
+		t.Fatalf("expected only non-empty reasoning to remain, got %#v", view.Items[4])
 	}
 }
 
@@ -693,6 +1110,9 @@ func TestSessionTemplateFoldsFinalAnswerUsageAndShowsTaskSummary(t *testing.T) {
 	html := buf.String()
 	if !strings.Contains(html, `class="meta response-usage"`) || !strings.Contains(html, wantUsage) || !strings.Contains(html, wantSummary) {
 		t.Fatalf("expected final answer usage and task summary in html, got %s", html)
+	}
+	if !strings.Contains(html, `id="line-4"`) {
+		t.Fatalf("expected folded token_count line anchor, got %s", html)
 	}
 	if strings.Contains(html, "Line 5") {
 		t.Fatalf("expected folded token_count line to be hidden, got %s", html)

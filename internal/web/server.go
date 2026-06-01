@@ -18,12 +18,14 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	appassets "codex-manager/assets"
 	"codex-manager/internal/active"
 	"codex-manager/internal/notifications"
 	"codex-manager/internal/render"
@@ -148,8 +150,20 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleNotifications(w, r)
 		return
 	}
+	if pathValue == "rate-limits" {
+		s.handleRateLimits(w, r)
+		return
+	}
 	if pathValue == "search" {
 		s.handleSearch(w, r)
+		return
+	}
+	if pathValue == "favicon.ico" {
+		serveEmbeddedAsset(w, r, "image/x-icon", appassets.FaviconICO())
+		return
+	}
+	if pathValue == "codex-manager-256.png" {
+		serveEmbeddedAsset(w, r, "image/png", appassets.IconPNG())
 		return
 	}
 	if strings.HasPrefix(pathValue, "markdown/") {
@@ -174,8 +188,27 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleSession(w, r, parts)
 		return
 	}
+	if len(parts) == 1 {
+		s.handleSessionIDRedirect(w, r, parts[0])
+		return
+	}
 
 	http.NotFound(w, r)
+}
+
+func serveEmbeddedAsset(w http.ResponseWriter, r *http.Request, contentType string, data []byte) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		w.Header().Set("Allow", "GET, HEAD")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
+	if r.Method == http.MethodHead {
+		return
+	}
+	_, _ = w.Write(data)
 }
 
 type dateView struct {
@@ -196,6 +229,8 @@ type sessionView struct {
 	Name                      string
 	DisplayName               string
 	Size                      string
+	TokenUsage                string
+	TokenUsageWarning         bool
 	ModTime                   string
 	ModTimeOnly               string
 	ResumeCommand             string
@@ -362,6 +397,27 @@ type notificationsPageView struct {
 	EmptyMessage string
 }
 
+type rateLimitEventView struct {
+	Timestamp            string
+	PrimaryUsedPercent   string
+	PrimaryReset         string
+	SecondaryUsedPercent string
+	SecondaryReset       string
+	Model                string
+	SessionID            string
+	SessionColorStyle    template.CSS
+	Link                 string
+}
+
+type rateLimitsPageView struct {
+	Date         string
+	PrevDate     string
+	NextDate     string
+	Entries      []rateLimitEventView
+	ThemeClass   string
+	EmptyMessage string
+}
+
 type itemView struct {
 	Line                 int
 	Timestamp            string
@@ -374,6 +430,8 @@ type itemView struct {
 	Content              string
 	Class                string
 	AutoCtx              bool
+	CollapsedPrompt      bool
+	CollapsedPromptLabel string
 	IsTurnAborted        bool
 	TurnAbortedMessage   string
 	SpeakerName          string
@@ -388,6 +446,7 @@ type itemView struct {
 	SubagentRequestHTML  template.HTML
 	HTML                 template.HTML
 	ResponseUsage        string
+	ExtraAnchorLines     []int
 	ToolRunCallTitle     string
 	ToolRunOutputLine    int
 	ToolRunOutputTitle   string
@@ -415,12 +474,14 @@ type updatePlanHTMLStep struct {
 }
 
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
+	if redirectPath := canonicalIndexPath(r.URL); redirectPath != "" {
+		http.Redirect(w, r, redirectPath, http.StatusFound)
+		return
+	}
+
 	view := r.URL.Query().Get("view")
 	heat := r.URL.Query().Get("heat")
-	if view == "" && r.URL.RawQuery == "" {
-		view = "dir"
-		heat = "1h"
-	} else if view != "dir" {
+	if view != "dir" {
 		view = "date"
 	}
 
@@ -428,6 +489,20 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = s.renderer.Execute(w, "index", indexView)
+}
+
+func canonicalIndexPath(u *url.URL) string {
+	query := u.Query()
+	view := strings.TrimSpace(query.Get("view"))
+	switch view {
+	case "date", "dir":
+		return ""
+	case "":
+		query.Set("view", "dir")
+	default:
+		query.Set("view", "date")
+	}
+	return "/?" + query.Encode()
 }
 
 func (s *Server) handleDir(w http.ResponseWriter, r *http.Request) {
@@ -615,6 +690,17 @@ func (s *Server) handleNotifications(w http.ResponseWriter, r *http.Request) {
 	_ = s.renderer.Execute(w, templateName, view)
 }
 
+func (s *Server) handleRateLimits(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.NotFound(w, r)
+		return
+	}
+
+	view := s.buildRateLimitsPageView(r)
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_ = s.renderer.Execute(w, "rate_limits", view)
+}
+
 func (s *Server) handleDay(w http.ResponseWriter, r *http.Request, parts []string) {
 	date, ok := sessions.ParseDate(parts[0], parts[1], parts[2])
 	if !ok {
@@ -622,9 +708,7 @@ func (s *Server) handleDay(w http.ResponseWriter, r *http.Request, parts []strin
 		return
 	}
 	if s.active != nil {
-		if err := s.refreshActiveIfStale(); err != nil {
-			log.Printf("active refresh failed during day render: %v", err)
-		}
+		s.refreshActiveIfStaleAsync()
 	}
 	selectedCwd := normalizeCwdParam(r.URL.Query().Get("cwd"))
 	viewMode := strings.TrimSpace(r.URL.Query().Get("view"))
@@ -705,9 +789,7 @@ func (s *Server) handleDay(w http.ResponseWriter, r *http.Request, parts []strin
 
 func (s *Server) handleSession(w http.ResponseWriter, r *http.Request, parts []string) {
 	if s.active != nil {
-		if err := s.refreshActiveIfStale(); err != nil {
-			log.Printf("active refresh failed during session render: %v", err)
-		}
+		s.refreshActiveIfStaleAsync()
 	}
 	view, err := s.buildSessionView(parts)
 	if err != nil {
@@ -820,6 +902,43 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		Limit:   page.Limit,
 		Total:   page.Total,
 	})
+}
+
+func (s *Server) handleSessionIDRedirect(w http.ResponseWriter, r *http.Request, rawID string) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		http.NotFound(w, r)
+		return
+	}
+	if s.idx == nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	sessionID := strings.TrimSpace(rawID)
+	if sessionID == "" {
+		http.NotFound(w, r)
+		return
+	}
+
+	decodedID, err := url.PathUnescape(sessionID)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	decodedID = strings.TrimSpace(decodedID)
+	if decodedID == "" || strings.Contains(decodedID, "/") || strings.Contains(decodedID, "\\") || strings.Contains(decodedID, "..") {
+		http.NotFound(w, r)
+		return
+	}
+
+	file, ok := s.idx.LookupByID(decodedID)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+
+	target := "/" + file.Date.Path() + "/" + url.PathEscape(file.Name) + "#last-item"
+	http.Redirect(w, r, target, http.StatusFound)
 }
 
 func (s *Server) handleShare(w http.ResponseWriter, r *http.Request, parts []string) {
@@ -1085,6 +1204,32 @@ func (s *Server) refreshActiveIfStale() error {
 	s.activeRefreshMu.Lock()
 	defer s.activeRefreshMu.Unlock()
 
+	return s.refreshActiveIfStaleLocked(maxAge)
+}
+
+func (s *Server) refreshActiveIfStaleAsync() {
+	if s.active == nil || s.idx == nil {
+		return
+	}
+	maxAge := s.activeRefreshMaxAge
+	if maxAge <= 0 {
+		maxAge = 15 * time.Second
+	}
+	if time.Since(s.idx.LastUpdated()) < maxAge && time.Since(s.active.LastUpdated()) < maxAge {
+		return
+	}
+	if !s.activeRefreshMu.TryLock() {
+		return
+	}
+	go func() {
+		defer s.activeRefreshMu.Unlock()
+		if err := s.refreshActiveIfStaleLocked(maxAge); err != nil {
+			log.Printf("active refresh failed in background: %v", err)
+		}
+	}()
+}
+
+func (s *Server) refreshActiveIfStaleLocked(maxAge time.Duration) error {
 	if time.Since(s.idx.LastUpdated()) < maxAge && time.Since(s.active.LastUpdated()) < maxAge {
 		return nil
 	}
@@ -1099,7 +1244,12 @@ func (s *Server) refreshActiveIfStale() error {
 			return err
 		}
 	}
+	releaseUnusedMemory()
 	return nil
+}
+
+func releaseUnusedMemory() {
+	debug.FreeOSMemory()
 }
 
 func (s *Server) buildActivePageView(r *http.Request) activePageView {
@@ -1227,6 +1377,124 @@ func (s *Server) buildNotificationsPageView(r *http.Request) notificationsPageVi
 		ThemeClass:   s.themeClass,
 		EmptyMessage: "No notifications received yet.",
 	}
+}
+
+func (s *Server) buildRateLimitsPageView(r *http.Request) rateLimitsPageView {
+	loc, _ := activeLocation(r)
+	date := parseRateLimitDate(r, loc)
+	dateKey := sessions.DateKey{
+		Year:  date.Format("2006"),
+		Month: date.Format("01"),
+		Day:   date.Format("02"),
+	}
+
+	files := s.idx.SessionsByDate(dateKey)
+	entries := make([]rateLimitEventView, 0)
+	for _, file := range files {
+		events, err := sessions.ExtractRateLimitEvents(file.Path, file.Name)
+		if err != nil {
+			continue
+		}
+		for _, event := range events {
+			entries = append(entries, rateLimitEventView{
+				Timestamp:            event.Timestamp,
+				PrimaryUsedPercent:   formatUsedPercent(event.PrimaryUsedPercent),
+				PrimaryReset:         formatResetTime(event.PrimaryResetsAt, loc),
+				SecondaryUsedPercent: formatUsedPercent(event.SecondaryUsedPercent),
+				SecondaryReset:       formatResetTime(event.SecondaryResetsAt, loc),
+				Model:                event.Model,
+				SessionID:            event.SessionID,
+				Link:                 "/" + file.Date.Path() + "/" + url.PathEscape(file.Name) + "#line-" + strconv.Itoa(event.Line),
+			})
+		}
+	}
+	sort.SliceStable(entries, func(i, j int) bool {
+		left, leftOK := parseTimestamp(entries[i].Timestamp)
+		right, rightOK := parseTimestamp(entries[j].Timestamp)
+		if leftOK && rightOK && !left.Equal(right) {
+			return left.Before(right)
+		}
+		if entries[i].Timestamp != entries[j].Timestamp {
+			return entries[i].Timestamp < entries[j].Timestamp
+		}
+		return entries[i].Link < entries[j].Link
+	})
+	assignRateLimitSessionColors(entries)
+
+	prev := date.AddDate(0, 0, -1)
+	next := date.AddDate(0, 0, 1)
+	return rateLimitsPageView{
+		Date:         date.Format("2006-01-02"),
+		PrevDate:     prev.Format("2006-01-02"),
+		NextDate:     next.Format("2006-01-02"),
+		Entries:      entries,
+		ThemeClass:   s.themeClass,
+		EmptyMessage: "No token_count rate-limit data found for this day.",
+	}
+}
+
+func parseRateLimitDate(r *http.Request, loc *time.Location) time.Time {
+	if loc == nil {
+		loc = time.UTC
+	}
+	value := strings.TrimSpace(r.URL.Query().Get("date"))
+	if value == "" {
+		return startOfDay(time.Now().In(loc))
+	}
+	if parsed, err := time.ParseInLocation("2006-01-02", value, loc); err == nil {
+		return startOfDay(parsed)
+	}
+	return startOfDay(time.Now().In(loc))
+}
+
+func parseTimestamp(value string) (time.Time, bool) {
+	if parsed, err := time.Parse(time.RFC3339Nano, value); err == nil {
+		return parsed, true
+	}
+	if parsed, err := time.Parse(time.RFC3339, value); err == nil {
+		return parsed, true
+	}
+	return time.Time{}, false
+}
+
+func formatUsedPercent(value *float64) string {
+	if value == nil {
+		return "-"
+	}
+	return strconv.FormatFloat(*value, 'f', 1, 64)
+}
+
+func formatResetTime(value *int64, loc *time.Location) string {
+	if value == nil || *value <= 0 {
+		return "-"
+	}
+	if loc == nil {
+		loc = time.Local
+	}
+	return time.Unix(*value, 0).In(loc).Format("2006-01-02 15:04")
+}
+
+func assignRateLimitSessionColors(entries []rateLimitEventView) {
+	stylesBySession := map[string]template.CSS{}
+	nextColor := 0
+	for index := range entries {
+		key := strings.TrimSpace(entries[index].SessionID)
+		if key == "" {
+			key = entries[index].Link
+		}
+		style, ok := stylesBySession[key]
+		if !ok {
+			style = rateLimitSessionColorStyle(nextColor)
+			stylesBySession[key] = style
+			nextColor++
+		}
+		entries[index].SessionColorStyle = style
+	}
+}
+
+func rateLimitSessionColorStyle(index int) template.CSS {
+	hue := math.Mod(float64(index)*137.508, 360)
+	return template.CSS(fmt.Sprintf("background: hsla(%.1f, 78%%, 46%%, 0.24); border-left-color: hsl(%.1f, 78%%, 54%%);", hue, hue))
 }
 
 func activeLocation(r *http.Request) (*time.Location, string) {
@@ -1495,7 +1763,7 @@ func (s *Server) buildSessionListView(file sessions.SessionFile) sessionView {
 func (s *Server) buildSessionViewsWithSnippets(files []sessions.SessionFile) []sessionView {
 	views := s.buildSessionViews(files)
 	for i, file := range files {
-		userSnippet, assistantSnippet, hasUser := extractLastSnippets(file)
+		userSnippet, assistantSnippet, hasUser, tokenUsage := extractLastSnippets(file)
 		if hasUser && userSnippet.Text == "" {
 			userSnippet.Text = "(empty)"
 		}
@@ -1505,6 +1773,8 @@ func (s *Server) buildSessionViewsWithSnippets(files []sessions.SessionFile) []s
 		views[i].LastAssistantSnippet = assistantSnippet.Text
 		views[i].LastAssistantSnippetTitle = assistantSnippet.Title
 		views[i].LastAssistantSnippetClass = assistantSnippet.SpeakerClass
+		views[i].TokenUsage = tokenUsage.Text
+		views[i].TokenUsageWarning = tokenUsage.Warning
 	}
 	return views
 }
@@ -1531,7 +1801,7 @@ func (s *Server) buildSessionViewsPageFiltered(files []sessions.SessionFile, pag
 	scannedAll := true
 	views := make([]sessionView, 0, perPage)
 	for _, file := range files {
-		userSnippet, assistantSnippet, hasUser := extractLastSnippets(file)
+		userSnippet, assistantSnippet, hasUser, tokenUsage := extractLastSnippets(file)
 		if !hasUser {
 			continue
 		}
@@ -1546,6 +1816,8 @@ func (s *Server) buildSessionViewsPageFiltered(files []sessions.SessionFile, pag
 			view.LastAssistantSnippet = assistantSnippet.Text
 			view.LastAssistantSnippetTitle = assistantSnippet.Title
 			view.LastAssistantSnippetClass = assistantSnippet.SpeakerClass
+			view.TokenUsage = tokenUsage.Text
+			view.TokenUsageWarning = tokenUsage.Warning
 			views = append(views, view)
 		}
 		if total >= end {
@@ -1587,10 +1859,17 @@ type sessionSnippet struct {
 	SpeakerClass string
 }
 
-func extractLastSnippets(file sessions.SessionFile) (sessionSnippet, sessionSnippet, bool) {
-	session, err := sessions.ParseSession(file.Path)
+type tokenUsageSummaryView struct {
+	Text    string
+	Warning bool
+}
+
+const tokenUsageInputCachedWarningThreshold = 272 * 1000
+
+func extractLastSnippets(file sessions.SessionFile) (sessionSnippet, sessionSnippet, bool, tokenUsageSummaryView) {
+	snippets, err := sessions.ExtractLastConversationSnippets(file.Path)
 	if err != nil {
-		return sessionSnippet{}, sessionSnippet{}, false
+		return sessionSnippet{}, sessionSnippet{}, false, tokenUsageSummaryView{}
 	}
 	userSnippet := sessionSnippet{
 		Title:        "User",
@@ -1600,28 +1879,27 @@ func extractLastSnippets(file sessions.SessionFile) (sessionSnippet, sessionSnip
 		Title:        "Agent",
 		SpeakerClass: "agent",
 	}
-	if session.Meta != nil && session.Meta.IsSubagentThread() {
+	if snippets.Meta != nil && snippets.Meta.IsSubagentThread() {
 		userSnippet.Title = "Agent"
 		userSnippet.SpeakerClass = "agent"
 		assistantSnippet.Title = "Subagent"
 		assistantSnippet.SpeakerClass = "subagent"
 	}
-	hasUser := false
-	for _, item := range session.Items {
-		switch item.Role {
-		case "user":
-			if sessions.IsAutoContextUserMessage(item.Content) {
-				continue
-			}
-			hasUser = true
-			userSnippet.Text = item.Content
-		case "assistant":
-			assistantSnippet.Text = item.Content
-		}
-	}
+	userSnippet.Text = snippets.LastUser
+	assistantSnippet.Text = snippets.LastAssistant
 	userSnippet.Text = snippetFromContent(userSnippet.Text, 180)
 	assistantSnippet.Text = snippetFromContent(assistantSnippet.Text, 180)
-	return userSnippet, assistantSnippet, hasUser
+	return userSnippet, assistantSnippet, snippets.HasUser, tokenUsageSummary(snippets.TokenUsage)
+}
+
+func tokenUsageSummary(usage sessions.TokenUsageDisplay) tokenUsageSummaryView {
+	if !usage.HasUsage() {
+		return tokenUsageSummaryView{}
+	}
+	return tokenUsageSummaryView{
+		Text:    usage.FormatTotalBreakdown(),
+		Warning: usage.InputTokens+usage.CachedInputTokens > tokenUsageInputCachedWarningThreshold,
+	}
 }
 
 func snippetFromContent(value string, max int) string {
@@ -1945,7 +2223,11 @@ func (s *Server) sessionThreadState(file sessions.SessionFile) (string, string, 
 	key := sessionSummaryKey(file)
 	summary, ok := s.active.Lookup(key)
 	if !ok {
-		return "", "", "", "", "", false
+		var err error
+		summary, err = active.BuildSummary(file)
+		if err != nil {
+			return "", "", "", "", "", false
+		}
 	}
 
 	ended := false
@@ -2043,6 +2325,7 @@ func (s *Server) buildSessionView(parts []string) (sessionPageView, error) {
 
 		if isTokenUsageItem(item) && item.TokenUsage != nil && len(items) > 0 && canAttachResponseUsage(items[len(items)-1]) {
 			items[len(items)-1].ResponseUsage = item.TokenUsage.Format(false)
+			items[len(items)-1].ExtraAnchorLines = append(items[len(items)-1].ExtraAnchorLines, item.Line)
 			continue
 		}
 
@@ -2180,6 +2463,7 @@ type toolRunUsageSummary struct {
 	Text        string
 	TotalTokens int
 	Usage       sessions.TokenUsageDisplay
+	AnchorLines []int
 }
 
 func toolRunTokenUsage(items []sessions.RenderItem, callIndex, outputIndex int, grouped map[int]struct{}) toolRunUsageSummary {
@@ -2188,6 +2472,7 @@ func toolRunTokenUsage(items []sessions.RenderItem, callIndex, outputIndex int, 
 	}
 
 	var usage sessions.TokenUsageDisplay
+	anchorLines := []int{}
 	hasUsage := false
 	for index := callIndex + 1; index < outputIndex; index++ {
 		if _, ok := grouped[index]; ok {
@@ -2202,6 +2487,7 @@ func toolRunTokenUsage(items []sessions.RenderItem, callIndex, outputIndex int, 
 			continue
 		}
 		usage = usage.Add(*item.TokenUsage)
+		anchorLines = append(anchorLines, item.Line)
 		hasUsage = true
 	}
 	if !hasUsage {
@@ -2211,6 +2497,7 @@ func toolRunTokenUsage(items []sessions.RenderItem, callIndex, outputIndex int, 
 		Text:        usage.Format(false),
 		TotalTokens: usage.TotalTokens,
 		Usage:       usage,
+		AnchorLines: anchorLines,
 	}
 }
 
@@ -2229,6 +2516,14 @@ func (s *Server) buildSessionItemView(item sessions.RenderItem, sessionCwd strin
 	if autoCtx && !isTurnAborted {
 		renderText = escapeAutoContextTags(renderText)
 	}
+	collapsedPrompt := false
+	if item.Role == "developer" {
+		if promptBody, ok := stripPermissionsInstructionsWrapper(renderText); ok {
+			renderText = promptBody
+			collapsedPrompt = true
+		}
+		renderText = escapePromptAngleBrackets(renderText)
+	}
 	view := itemView{
 		Line:               item.Line,
 		Timestamp:          item.Timestamp,
@@ -2246,6 +2541,10 @@ func (s *Server) buildSessionItemView(item sessions.RenderItem, sessionCwd strin
 		SubagentRequest:    displayItem.SubagentRequest,
 		Markdown:           renderItemMarkdown(displayItem),
 		HTML:               markdownToHTML(renderText),
+	}
+	if collapsedPrompt {
+		view.CollapsedPrompt = true
+		view.CollapsedPromptLabel = "Developer instructions"
 	}
 	if item.Subtype == "function_call" && item.ToolName == "update_plan" {
 		if planHTML := renderUpdatePlanHTML(item.CallID, item.ToolInput); planHTML != "" {
@@ -2352,6 +2651,7 @@ func buildToolRunView(callItem sessions.RenderItem, callView itemView, outputIte
 		ToolRunUsage:        tokenUsage.Text,
 		ToolRunUsageTotal:   tokenUsage.TotalTokens,
 		ToolRunUsageDisplay: tokenUsage.Usage,
+		ExtraAnchorLines:    tokenUsage.AnchorLines,
 	}
 }
 
@@ -2717,6 +3017,37 @@ func escapeAutoContextTags(text string) string {
 		"</subagent_notification>", "&lt;/subagent_notification&gt;",
 	)
 	return replacer.Replace(text)
+}
+
+func escapePromptAngleBrackets(text string) string {
+	replacer := strings.NewReplacer("<", "&lt;", ">", "&gt;")
+	return replacer.Replace(text)
+}
+
+func stripPermissionsInstructionsWrapper(text string) (string, bool) {
+	const (
+		openTag  = "<permissions instructions>"
+		closeTag = "</permissions instructions>"
+	)
+	body := strings.TrimSpace(text)
+	if !strings.HasPrefix(body, openTag) {
+		return text, false
+	}
+	body = strings.TrimSpace(strings.TrimPrefix(body, openTag))
+	closeIndex := strings.Index(body, closeTag)
+	if closeIndex >= 0 {
+		before := strings.TrimSpace(body[:closeIndex])
+		after := strings.TrimSpace(body[closeIndex+len(closeTag):])
+		switch {
+		case before == "":
+			body = after
+		case after == "":
+			body = before
+		default:
+			body = before + "\n\n" + after
+		}
+	}
+	return body, true
 }
 
 var markdownEngine = goldmark.New(

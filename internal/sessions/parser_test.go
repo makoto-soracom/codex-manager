@@ -59,6 +59,126 @@ func TestParseSession(t *testing.T) {
 	}
 }
 
+func TestExtractLastConversationSnippetsMatchesParsedSession(t *testing.T) {
+	base := t.TempDir()
+	filePath := filepath.Join(base, "session.jsonl")
+	data := "" +
+		"{\"timestamp\":\"2026-01-09T01:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"abc\",\"timestamp\":\"2026-01-09T01:00:00Z\",\"cwd\":\"/tmp\",\"originator\":\"cli\",\"cli_version\":\"0.1\"}}\n" +
+		"{\"timestamp\":\"2026-01-09T01:00:01Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"# AGENTS.md instructions for /tmp\\n\\n<INSTRUCTIONS>\\nauto context\\n</INSTRUCTIONS>\"}]}}\n" +
+		"{\"timestamp\":\"2026-01-09T01:00:02Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"## My request for Codex:\\nEarlier\"}]}}\n" +
+		"{\"timestamp\":\"2026-01-09T01:00:03Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"## My request for Codex:\\nLatest\"}]}}\n" +
+		"{\"timestamp\":\"2026-01-09T01:00:04Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"function_call_output\",\"call_id\":\"call_1\",\"output\":\"large output should not become a snippet\"}}\n" +
+		"{\"timestamp\":\"2026-01-09T01:00:05Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"Final answer\"}]}}\n"
+
+	if err := os.WriteFile(filePath, []byte(data), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	session, err := ParseSession(filePath)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	snippets, err := ExtractLastConversationSnippets(filePath)
+	if err != nil {
+		t.Fatalf("extract snippets: %v", err)
+	}
+
+	var wantUser, wantAssistant string
+	hasUser := false
+	lastUserIndex := -1
+	lastAssistantIndex := -1
+	for index, item := range session.Items {
+		switch item.Role {
+		case "user":
+			if IsAutoContextUserMessage(item.Content) {
+				continue
+			}
+			hasUser = true
+			wantUser = item.Content
+			lastUserIndex = index
+		case "assistant":
+			wantAssistant = item.Content
+			lastAssistantIndex = index
+		}
+	}
+
+	if snippets.Meta == nil || snippets.Meta.ID != "abc" {
+		t.Fatalf("expected meta id abc, got %#v", snippets.Meta)
+	}
+	if snippets.HasUser != hasUser {
+		t.Fatalf("expected hasUser %v, got %v", hasUser, snippets.HasUser)
+	}
+	if snippets.LastUser != wantUser {
+		t.Fatalf("expected user snippet %q, got %q", wantUser, snippets.LastUser)
+	}
+	if snippets.LastAssistant != wantAssistant {
+		t.Fatalf("expected assistant snippet %q, got %q", wantAssistant, snippets.LastAssistant)
+	}
+	if snippets.AssistantAfterLastUser != (lastAssistantIndex > lastUserIndex) {
+		t.Fatalf("unexpected assistant/user ordering: %#v", snippets)
+	}
+}
+
+func TestExtractLastConversationSnippetsSumsTokenUsage(t *testing.T) {
+	base := t.TempDir()
+	filePath := filepath.Join(base, "session.jsonl")
+	data := "" +
+		"{\"timestamp\":\"2026-03-18T00:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"session-token-usage\",\"timestamp\":\"2026-03-18T00:00:00Z\",\"cwd\":\"/tmp\",\"originator\":\"cli\",\"cli_version\":\"0.1\"}}\n" +
+		"{\"timestamp\":\"2026-03-18T00:00:01Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"## My request for Codex:\\nShow usage\"}]}}\n" +
+		"{\"timestamp\":\"2026-03-18T00:00:02Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"total_token_usage\":{\"input_tokens\":10000,\"cached_input_tokens\":8000,\"output_tokens\":500,\"reasoning_output_tokens\":100,\"total_tokens\":10500},\"last_token_usage\":{\"input_tokens\":1000,\"cached_input_tokens\":512,\"output_tokens\":10,\"reasoning_output_tokens\":0,\"total_tokens\":1010},\"model_context_window\":258400},\"rate_limits\":{\"limit_id\":\"codex\",\"plan_type\":\"team\"}}}\n" +
+		"{\"timestamp\":\"2026-03-18T00:00:03Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"Done\"}]}}\n" +
+		"{\"timestamp\":\"2026-03-18T00:00:04Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"total_token_usage\":{\"input_tokens\":11200,\"cached_input_tokens\":9024,\"output_tokens\":540,\"reasoning_output_tokens\":100,\"total_tokens\":11740},\"last_token_usage\":{\"input_tokens\":1200,\"cached_input_tokens\":1024,\"output_tokens\":40,\"reasoning_output_tokens\":0,\"total_tokens\":1240},\"model_context_window\":258400},\"rate_limits\":{\"limit_id\":\"codex\",\"plan_type\":\"team\"}}}\n"
+	if err := os.WriteFile(filePath, []byte(data), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	snippets, err := ExtractLastConversationSnippets(filePath)
+	if err != nil {
+		t.Fatalf("extract snippets: %v", err)
+	}
+	if got := snippets.TokenUsage.FormatTotalBreakdown(); got != "total=11,740 (input=2,176 cached=9,024 output=540 (reasoning=100))" {
+		t.Fatalf("expected latest cumulative token usage, got %q", got)
+	}
+	if !snippets.TokenUsage.HasUsage() {
+		t.Fatal("expected token usage")
+	}
+	if snippets.LastUser != "Show usage" || snippets.LastAssistant != "Done" {
+		t.Fatalf("expected snippets to remain populated, got %#v", snippets)
+	}
+}
+
+func TestExtractLastConversationSnippetsDetectsNoAssistantAfterLatestUser(t *testing.T) {
+	base := t.TempDir()
+	filePath := filepath.Join(base, "session.jsonl")
+	data := "" +
+		"{\"timestamp\":\"2026-01-09T01:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"abc\",\"timestamp\":\"2026-01-09T01:00:00Z\",\"cwd\":\"/tmp\",\"originator\":\"cli\",\"cli_version\":\"0.1\"}}\n" +
+		"{\"timestamp\":\"2026-01-09T01:00:01Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"## My request for Codex:\\nEarlier\"}]}}\n" +
+		"{\"timestamp\":\"2026-01-09T01:00:02Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"Working\"}]}}\n" +
+		"{\"timestamp\":\"2026-01-09T01:00:03Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"## My request for Codex:\\nLatest\"}]}}\n" +
+		"{\"timestamp\":\"2026-01-09T01:00:04Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\"}}\n"
+
+	if err := os.WriteFile(filePath, []byte(data), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	snippets, err := ExtractLastConversationSnippets(filePath)
+	if err != nil {
+		t.Fatalf("extract snippets: %v", err)
+	}
+	if !snippets.HasUser {
+		t.Fatal("expected user snippet")
+	}
+	if snippets.LastUser != "Latest" {
+		t.Fatalf("expected latest user snippet, got %q", snippets.LastUser)
+	}
+	if snippets.LastAssistant != "Working" {
+		t.Fatalf("expected last assistant snippet, got %q", snippets.LastAssistant)
+	}
+	if snippets.AssistantAfterLastUser {
+		t.Fatal("expected no assistant after latest user")
+	}
+}
+
 func TestParseSessionShowsTokenCountEvent(t *testing.T) {
 	base := t.TempDir()
 	filePath := filepath.Join(base, "session.jsonl")
@@ -270,7 +390,7 @@ func TestParseSessionCapturesSubagentThreadMeta(t *testing.T) {
 	}
 }
 
-func TestParseSessionPreservesAutoContextBeforeUserRequest(t *testing.T) {
+func TestParseSessionPreservesDeveloperMessagesAndAutoContextBeforeUserRequest(t *testing.T) {
 	base := t.TempDir()
 	filePath := filepath.Join(base, "session.jsonl")
 	data := "" +
@@ -292,14 +412,23 @@ func TestParseSessionPreservesAutoContextBeforeUserRequest(t *testing.T) {
 	if session.Meta == nil || session.Meta.Instructions != "base" {
 		t.Fatalf("expected base instructions to populate session meta, got %#v", session.Meta)
 	}
-	if len(session.Items) != 2 {
-		t.Fatalf("expected 2 items, got %d", len(session.Items))
+	if len(session.Items) != 4 {
+		t.Fatalf("expected 4 items, got %d", len(session.Items))
 	}
-	if !IsAutoContextUserMessage(session.Items[0].Content) {
-		t.Fatalf("expected first item to be detected as auto context: %q", session.Items[0].Content)
+	if session.Items[0].Role != "developer" || session.Items[0].Title != "Developer" || session.Items[0].Class != "role-developer" {
+		t.Fatalf("expected first developer item, got %#v", session.Items[0])
 	}
-	if session.Items[1].Content != "Fix it" {
-		t.Fatalf("expected trimmed user request, got %q", session.Items[1].Content)
+	if session.Items[0].Content != "ignored" {
+		t.Fatalf("expected first developer content, got %q", session.Items[0].Content)
+	}
+	if !IsAutoContextUserMessage(session.Items[1].Content) {
+		t.Fatalf("expected second item to be detected as auto context: %q", session.Items[1].Content)
+	}
+	if session.Items[2].Role != "developer" || session.Items[2].Content != "ignored again" {
+		t.Fatalf("expected second developer item, got %#v", session.Items[2])
+	}
+	if session.Items[3].Content != "Fix it" {
+		t.Fatalf("expected trimmed user request, got %q", session.Items[3].Content)
 	}
 }
 

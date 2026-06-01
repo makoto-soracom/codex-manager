@@ -1,0 +1,37 @@
+{{ define "top_nav" }}
+<nav class="top-nav" aria-label="Primary navigation">
+  <div class="top-nav-left">
+    <a href="/?view=date">All Date</a>
+    <span aria-hidden="true">/</span>
+    <a href="/?view=dir">All Directory</a>
+  </div>
+  <div class="top-nav-right">
+    <a href="/active">Active threads</a>
+    <span aria-hidden="true">/</span>
+    <a href="/rate-limits">Rate limits</a>
+    <span aria-hidden="true">/</span>
+    <a href="/notifications">Notifications</a>
+  </div>
+</nav>
+{{ end }}
+
+{{ define "session_top_nav" }}
+<nav class="top-nav" aria-label="Session navigation">
+  <div class="top-nav-left">
+    {{ if .File.Cwd }}
+    <a href="/dir?cwd={{ .File.Cwd | urlquery }}">All Dates in this directory</a>
+    {{ else }}
+    <a href="/?view=date">All Date</a>
+    {{ end }}
+    <span aria-hidden="true">/</span>
+    <a href="/{{ .Date.Path }}/">All Directories on this day</a>
+  </div>
+  <div class="top-nav-right">
+    <a href="/active">Active threads</a>
+    <span aria-hidden="true">/</span>
+    <a href="/rate-limits">Rate limits</a>
+    <span aria-hidden="true">/</span>
+    <a href="/notifications">Notifications</a>
+  </div>
+</nav>
+{{ end }}

@@ -1,4 +1,6 @@
 {{ define "style" }}
+<link rel="icon" href="/favicon.ico" sizes="any">
+<link rel="icon" type="image/png" href="/codex-manager-256.png" sizes="256x256">
 <style>
 :root {
   --bg: #0c1112;
@@ -159,6 +161,24 @@ header a {
   color: var(--accent);
   text-decoration: none;
 }
+.top-nav {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 24px;
+  color: var(--muted);
+  margin: 0 0 8px;
+  font-size: 14px;
+}
+.top-nav-left,
+.top-nav-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.top-nav-right {
+  justify-content: flex-end;
+}
 .cwd-link {
   color: var(--accent);
   text-decoration: none;
@@ -244,6 +264,13 @@ main {
   color: var(--muted);
   margin: 0;
 }
+.page-context {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  margin: 0 0 8px;
+}
 .card {
   background: var(--panel);
   border: 1px solid var(--border-strong);
@@ -251,6 +278,16 @@ main {
   padding: 16px 20px;
   margin: 16px 0;
   box-shadow: 0 10px 30px rgba(40, 30, 20, 0.05);
+}
+.session-tools-grid {
+  display: grid;
+  grid-template-columns: minmax(280px, 0.8fr) minmax(360px, 1.2fr);
+  gap: 16px;
+  align-items: start;
+  margin: 16px 0;
+}
+.session-tools-grid .card {
+  margin: 0;
 }
 .search-card {
   display: flex;
@@ -299,6 +336,10 @@ main {
 }
 .search-results {
   margin: 0;
+}
+.session-tools-grid .search-results:not(:empty) {
+  max-height: 60vh;
+  overflow: auto;
 }
 .search-result-link {
   display: block;
@@ -544,6 +585,22 @@ main {
   margin: 10px 0 14px;
   flex-wrap: wrap;
 }
+.rate-limit-list {
+  font-size: 14px;
+}
+.rate-limit-item {
+  border-radius: 10px;
+  border-left: 4px solid transparent;
+}
+.rate-limit-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  align-items: baseline;
+}
+.mono-link {
+  font-family: "SFMono-Regular", "Menlo", "Monaco", "Courier New", monospace;
+}
 .page-meta {
   color: var(--muted);
   font-size: 12px;
@@ -584,6 +641,10 @@ main {
 .meta {
   color: var(--muted);
   font-size: 14px;
+}
+.token-usage-warning {
+  color: #f59e0b;
+  font-weight: 700;
 }
 summary.meta {
   cursor: pointer;
@@ -654,7 +715,7 @@ summary.meta {
   box-shadow: inset 0 0 0 1px var(--speaker-subagent-glow);
 }
 .session-item.role-tool { background: var(--tool); }
-.session-item.role-system, .session-item.role-unknown { background: var(--system); }
+.session-item.role-system, .session-item.role-developer, .session-item.role-unknown { background: var(--system); }
 .session-item.role-error { background: var(--error); }
 .session-item.auto-context {
   border-color: rgba(73, 193, 181, 0.35);
@@ -934,6 +995,7 @@ summary.meta {
 .session-content .update-plan-step.is-in-progress .update-plan-text {
   color: var(--accent);
 }
+pre.session-content,
 .session-content pre {
   margin: 0 0 0.9em;
   padding: 12px 14px;
@@ -1181,8 +1243,19 @@ summary.meta {
   header, main {
     padding: 16px;
   }
+  .top-nav {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+  }
+  .top-nav-right {
+    justify-content: flex-start;
+  }
   .page-title {
     font-size: 26px;
+  }
+  .session-tools-grid {
+    grid-template-columns: 1fr;
   }
   .active-session-header {
     flex-direction: column;

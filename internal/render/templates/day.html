@@ -9,10 +9,10 @@
 </head>
 <body class="{{ .ThemeClass }}">
   <header>
-    <p class="subtitle"><a href="/">All dates</a> / <a href="/active">Active threads</a> / <a href="/notifications">Notifications</a>{{ if .SelectedCwd }} / <a href="/?view=dir">All directories</a> / <a href="/dir?cwd={{ .SelectedCwd | urlquery }}">Directory dates</a>{{ end }}</p>
+    {{ template "top_nav" . }}
     <h1 class="page-title">Sessions on {{ .Date.Label }}{{ if .SelectedCwdLabel }} – {{ .SelectedCwdLabel }}{{ end }}</h1>
     {{ if .SelectedCwd }}
-    <p class="meta">Directory filter active. <a href="/{{ .Date.Path }}/">Clear directory filter</a></p>
+    <p class="meta">Directory filter active. <a href="/dir?cwd={{ .SelectedCwd | urlquery }}">Directory dates</a> / <a href="/{{ .Date.Path }}/">Clear directory filter</a></p>
     {{ end }}
     <form class="filter-form" method="get" action="/{{ .Date.Path }}/">
       {{ if .SelectedCwd }}<input type="hidden" name="cwd" value="{{ .SelectedCwd }}">{{ end }}

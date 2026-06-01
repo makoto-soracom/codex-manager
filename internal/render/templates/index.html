@@ -9,7 +9,7 @@
 </head>
 <body class="{{ .ThemeClass }}">
   <header>
-    <p class="subtitle">Codex sessions browser / <a href="/active">Active threads</a> / <a href="/notifications">Notifications</a></p>
+    {{ template "top_nav" . }}
     <h1 class="page-title">{{ if eq .View "dir" }}Available Directories{{ else }}Available Dates{{ end }}</h1>
     <div class="tabs">
       <a class="tab {{ if eq .View "date" }}active{{ end }}" href="/?view=date">By date</a>
@@ -25,21 +25,33 @@
     {{ end }}
   </header>
   <main>
-    <div class="card search-card">
-      <form id="search-form" class="search-form" action="#" method="get">
-        <label class="search-label" for="search-input">Search sessions</label>
-        <div class="search-actions">
-          <input id="search-input" class="search-input" type="search" placeholder="Search across all sessions" autocomplete="off" spellcheck="false">
-          <button class="nav-btn" type="submit">Search</button>
-        </div>
-      </form>
-      <p id="search-status" class="meta search-status"></p>
-      <div id="search-pagination" class="pagination search-pagination" hidden>
-        <button id="search-prev" class="nav-btn" type="button">⬅️ Prev</button>
-        <span id="search-page-meta" class="page-meta"></span>
-        <button id="search-next" class="nav-btn" type="button">Next ➡️</button>
+    <div class="session-tools-grid">
+      <div class="card search-card">
+        <form id="session-id-form" class="search-form" action="/" method="get">
+          <label class="search-label" for="session-id-input">Open session ID</label>
+          <div class="search-actions">
+            <input id="session-id-input" class="search-input" type="search" placeholder="Paste exact session ID" autocomplete="off" spellcheck="false">
+            <button class="nav-btn" type="submit">Open</button>
+          </div>
+        </form>
+        <p class="meta search-status">Redirects to the matching session page.</p>
       </div>
-      <ul id="search-results" class="list search-results"></ul>
+      <div class="card search-card">
+        <form id="search-form" class="search-form" action="#" method="get">
+          <label class="search-label" for="search-input">Search sessions</label>
+          <div class="search-actions">
+            <input id="search-input" class="search-input" type="search" placeholder="Search across all sessions" autocomplete="off" spellcheck="false">
+            <button class="nav-btn" type="submit">Search</button>
+          </div>
+        </form>
+        <p id="search-status" class="meta search-status"></p>
+        <div id="search-pagination" class="pagination search-pagination" hidden>
+          <button id="search-prev" class="nav-btn" type="button">⬅️ Prev</button>
+          <span id="search-page-meta" class="page-meta"></span>
+          <button id="search-next" class="nav-btn" type="button">Next ➡️</button>
+        </div>
+        <ul id="search-results" class="list search-results"></ul>
+      </div>
     </div>
     <div class="card">
       {{ if eq .View "dir" }}
@@ -84,6 +96,19 @@
     <p class="meta">Last scan: {{ .LastScan }}</p>
   </main>
   <script>
+    (function () {
+      var form = document.getElementById("session-id-form");
+      var input = document.getElementById("session-id-input");
+      if (!form || !input) return;
+
+      form.addEventListener("submit", function (event) {
+        event.preventDefault();
+        var sessionID = input.value.trim();
+        if (!sessionID) return;
+        window.location.href = "/" + encodeURIComponent(sessionID);
+      });
+    })();
+
     (function () {
       var form = document.getElementById("search-form");
       var input = document.getElementById("search-input");

@@ -9,7 +9,7 @@
 </head>
 <body class="{{ .ThemeClass }}">
   <header>
-    <p class="subtitle"><a href="/?view=dir">All directories</a> / <a href="/active">Active threads</a> / <a href="/notifications">Notifications</a></p>
+    {{ template "top_nav" . }}
     <h1 class="page-title">Sessions for {{ .Dir.Label }}</h1>
     <p class="meta">{{ .Dir.Count }} session{{ if ne .Dir.Count 1 }}s{{ end }}</p>
     <form class="filter-form" method="get" action="/dir">
@@ -44,7 +44,7 @@
         <li class="session-list-item">
           <a class="link-item-link" href="/{{ .DatePath }}/{{ .Name }}#last-item">
             {{ .DisplayName }}
-            <span class="meta">{{ .ModTime }} | {{ .Size }}{{ if .Branch }} | Branch: {{ .Branch }}{{ end }}</span>
+            <span class="meta">{{ .ModTime }} | {{ .Size }}{{ if .TokenUsage }} | <span class="token-usage{{ if .TokenUsageWarning }} token-usage-warning{{ end }}"{{ if .TokenUsageWarning }} title="Warning: input + cached exceeds 272KB"{{ end }}>Tokens: {{ .TokenUsage }}</span>{{ end }}{{ if .Branch }} | Branch: {{ .Branch }}{{ end }}</span>
           </a>
           {{ if or .LastUserSnippet .LastAssistantSnippet }}
           <div class="session-snippet session-snippet-thread">

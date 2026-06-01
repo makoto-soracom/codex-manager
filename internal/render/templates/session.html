@@ -9,7 +9,8 @@
 </head>
 <body class="{{ .ThemeClass }} has-sticky-header">
   <header class="sticky-header">
-    <p class="subtitle"><a href="/">All dates</a> / <a href="/active">Active threads</a> / <a href="/notifications">Notifications</a> / {{ .Date.Label }}{{ if .File.ModTimeOnly }} {{ .File.ModTimeOnly }}{{ end }} ({{ .File.Size }})</p>
+    {{ template "session_top_nav" . }}
+    <p class="subtitle page-context">Last updated at: {{ .File.ModTime }} (JSONL: {{ .File.Size }})</p>
     <h1 class="page-title">{{ .File.DisplayName }}</h1>
     <div class="session-page-toolbar">
       <div class="session-page-toolbar-row session-page-thread-row">
@@ -99,6 +100,7 @@
       </section>
       {{ else }}
       <section id="line-{{ .Line }}" class="{{ if .IsTurnAborted }}turn-aborted-item{{ else }}session-item {{ .Class }}{{ end }}">
+        {{ range .ExtraAnchorLines }}<span id="line-{{ . }}" class="session-anchor"></span>{{ end }}
         {{ if eq .Line $.LastUserLine }}<span id="last-user" class="session-anchor"></span>{{ end }}
         {{ if eq .Line $.LastAgentLine }}<span id="last-agent" class="session-anchor"></span>{{ end }}
         {{ if and (gt $.LastUserLine 0) (eq .Line $.LastUserLine) }}<span id="last-item" class="session-anchor"></span>{{ else if and (eq $.LastUserLine 0) (eq .Line $.LastItemLine) (not .ToolRunOutputLine) }}<span id="last-item" class="session-anchor"></span>{{ end }}
@@ -149,6 +151,11 @@
         {{ else if .AutoCtx }}
         <details>
           <summary class="meta">Reveal Context</summary>
+          <div class="session-content markdown">{{ .HTML }}</div>
+        </details>
+        {{ else if .CollapsedPrompt }}
+        <details>
+          <summary class="meta">{{ .CollapsedPromptLabel }}</summary>
           <div class="session-content markdown">{{ .HTML }}</div>
         </details>
         {{ else }}

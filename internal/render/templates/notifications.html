@@ -9,7 +9,7 @@
 </head>
 <body class="{{ .ThemeClass }}">
   <header>
-    <p class="subtitle"><a href="/">All dates</a> / <a href="/active">Active threads</a></p>
+    {{ template "top_nav" . }}
     <h1 class="page-title">Notifications</h1>
   </header>
   <main id="notifications-root">

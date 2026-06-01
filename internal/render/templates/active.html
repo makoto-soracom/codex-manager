@@ -9,7 +9,7 @@
 </head>
 <body class="{{ .ThemeClass }}">
   <header>
-    <p class="subtitle"><a href="/">All dates</a> / <a href="/?view=dir">All directories</a> / <a href="/notifications">Notifications</a></p>
+    {{ template "top_nav" . }}
     <h1 class="page-title">{{ .Heading }}</h1>
     {{ if .SelectedCwd }}
     <p class="meta">Directory filter active: {{ .SelectedCwdLabel }}. <a href="/active">Clear directory filter</a></p>

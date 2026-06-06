@@ -158,6 +158,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleSearch(w, r)
 		return
 	}
+	if pathValue == "version" {
+		handleVersion(w, r)
+		return
+	}
 	if pathValue == "favicon.ico" {
 		serveEmbeddedAsset(w, r, "image/x-icon", appassets.FaviconICO())
 		return
@@ -3442,4 +3446,70 @@ func markdownToHTML(text string) template.HTML {
 		return template.HTML(html.EscapeString(text))
 	}
 	return template.HTML(buf.String())
+}
+
+func handleVersion(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	info, ok := debug.ReadBuildInfo()
+	revision := "unknown"
+	dirty := false
+	buildTime := "unknown"
+	goVersion := "unknown"
+
+	if ok {
+		goVersion = info.GoVersion
+		for _, s := range info.Settings {
+			switch s.Key {
+			case "vcs.revision":
+				revision = s.Value
+				if len(revision) > 10 {
+					revision = revision[:10]
+				}
+			case "vcs.modified":
+				dirty = s.Value == "true"
+			case "vcs.time":
+				buildTime = s.Value
+			}
+		}
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	fmt.Fprintf(w, `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Version - Codex Manager</title>
+<style>
+body { background: #0c1112; color: #e0dcd4; font-family: system-ui, sans-serif; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; }
+.card { background: #1a1e20; border: 1px solid #2d3235; border-radius: 12px; padding: 32px 48px; text-align: center; }
+h1 { font-size: 20px; margin: 0 0 24px; color: #49c1b5; }
+dl { display: grid; grid-template-columns: auto 1fr; gap: 8px 20px; text-align: left; margin: 0; }
+dt { color: #8a8478; font-size: 13px; }
+dd { margin: 0; font-family: "SFMono-Regular", "Menlo", monospace; font-size: 14px; }
+.dirty { color: #f59e0b; }
+</style>
+</head>
+<body>
+<div class="card">
+<h1>Codex Manager</h1>
+<dl>
+<dt>Commit</dt><dd>%s%s</dd>
+<dt>Built at</dt><dd>%s</dd>
+<dt>Go</dt><dd>%s</dd>
+</dl>
+</div>
+</body>
+</html>`, revision, dirtyHTML(dirty), buildTime, goVersion)
+}
+
+func dirtyHTML(dirty bool) string {
+	if dirty {
+		return ` <span class="dirty">(dirty)</span>`
+	}
+	return ""
 }

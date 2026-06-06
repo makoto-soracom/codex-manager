@@ -44,7 +44,7 @@
         <li class="session-list-item">
           <a class="link-item-link" href="/{{ .DatePath }}/{{ .Name }}#last-item">
             {{ .DisplayName }}
-            <span class="meta">{{ .ModTime }} | {{ .Size }}{{ if .TokenUsage }} | <span class="token-usage{{ if .TokenUsageWarning }} token-usage-warning{{ end }}"{{ if .TokenUsageWarning }} title="Warning: input + cached exceeds 272KB"{{ end }}>Tokens: {{ .TokenUsage }}</span>{{ end }}{{ if .Branch }} | Branch: {{ .Branch }}{{ end }}</span>
+            <span class="meta">{{ .ModTime }} | {{ .Size }}{{ if .Originator }} | <span class="originator-badge originator-{{ .Originator }}">{{ .Originator }}</span>{{ end }}{{ if .TokenUsage }} | <span class="token-usage{{ if .TokenUsageWarning }} token-usage-warning{{ end }}"{{ if .TokenUsageWarning }} title="Warning: input + cached exceeds 272KB"{{ end }}>Tokens: {{ .TokenUsage }}</span>{{ end }}{{ if .Branch }} | Branch: {{ .Branch }}{{ end }}</span>
           </a>
           {{ if or .LastUserSnippet .LastAssistantSnippet }}
           <div class="session-snippet session-snippet-thread">

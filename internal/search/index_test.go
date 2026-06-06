@@ -18,7 +18,7 @@ func TestIndexSearch(t *testing.T) {
 		`{"timestamp":"t2","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"text","text":"Here is a search result"}]}}`,
 	})
 
-	idx := sessions.NewIndex(baseDir)
+	idx := sessions.NewIndex(baseDir, "")
 	if err := idx.Refresh(); err != nil {
 		t.Fatalf("refresh: %v", err)
 	}
@@ -73,7 +73,7 @@ func TestSearchDeduplicatesConsecutiveUserAssistantHits(t *testing.T) {
 		`{"timestamp":"2024-01-02T00:00:02Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"text","text":"キーワード を含む回答"}]}}`,
 	})
 
-	idx := sessions.NewIndex(baseDir)
+	idx := sessions.NewIndex(baseDir, "")
 	if err := idx.Refresh(); err != nil {
 		t.Fatalf("refresh: %v", err)
 	}
@@ -106,7 +106,7 @@ func TestSearchKeepsAssistantOnlyHit(t *testing.T) {
 		`{"timestamp":"2024-01-02T00:00:02Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"text","text":"キーワード を含む回答"}]}}`,
 	})
 
-	idx := sessions.NewIndex(baseDir)
+	idx := sessions.NewIndex(baseDir, "")
 	if err := idx.Refresh(); err != nil {
 		t.Fatalf("refresh: %v", err)
 	}
@@ -142,7 +142,7 @@ func TestSearchIncludesDisplayFile(t *testing.T) {
 		`{"timestamp":"2026-03-13T00:00:01Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"text","text":"Please check the display name"}]}}`,
 	})
 
-	idx := sessions.NewIndex(sessionsDir)
+	idx := sessions.NewIndex(sessionsDir, "")
 	if err := idx.Refresh(); err != nil {
 		t.Fatalf("refresh: %v", err)
 	}
@@ -188,7 +188,7 @@ func TestSearchIgnoresRawMetadataOnlyHits(t *testing.T) {
 		`{"timestamp":"2024-01-02T00:00:01Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"text","text":"visible content"}]}}`,
 	})
 
-	idx := sessions.NewIndex(baseDir)
+	idx := sessions.NewIndex(baseDir, "")
 	if err := idx.Refresh(); err != nil {
 		t.Fatalf("refresh: %v", err)
 	}
@@ -226,7 +226,7 @@ func TestSearchReturnsMostRecentMatchFirst(t *testing.T) {
 		t.Fatalf("chtimes newer: %v", err)
 	}
 
-	idx := sessions.NewIndex(baseDir)
+	idx := sessions.NewIndex(baseDir, "")
 	if err := idx.Refresh(); err != nil {
 		t.Fatalf("refresh: %v", err)
 	}
@@ -279,7 +279,7 @@ func TestSearchPageWithOffset(t *testing.T) {
 		`{"timestamp":"2024-01-02T00:00:02Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"text","text":"needle second"}]}}`,
 	})
 
-	idx := sessions.NewIndex(baseDir)
+	idx := sessions.NewIndex(baseDir, "")
 	if err := idx.Refresh(); err != nil {
 		t.Fatalf("refresh: %v", err)
 	}
@@ -312,7 +312,7 @@ func TestSearchMatchesMergedAssistantLineRanges(t *testing.T) {
 		`{"timestamp":"2024-01-02T00:00:02Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"text","text":"needle second assistant line"}]}}`,
 	})
 
-	idx := sessions.NewIndex(baseDir)
+	idx := sessions.NewIndex(baseDir, "")
 	if err := idx.Refresh(); err != nil {
 		t.Fatalf("refresh: %v", err)
 	}

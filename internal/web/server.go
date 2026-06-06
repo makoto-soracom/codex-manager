@@ -231,6 +231,7 @@ type sessionView struct {
 	Size                      string
 	TokenUsage                string
 	TokenUsageWarning         bool
+	Originator                string
 	ModTime                   string
 	ModTimeOnly               string
 	ResumeCommand             string
@@ -1731,6 +1732,16 @@ func (s *Server) buildSessionViews(files []sessions.SessionFile) []sessionView {
 	return views
 }
 
+func originatorLabel(meta *sessions.SessionMeta) string {
+	if meta == nil {
+		return "codex"
+	}
+	if meta.Originator == "kiro" {
+		return "kiro"
+	}
+	return "codex"
+}
+
 func (s *Server) buildSessionListView(file sessions.SessionFile) sessionView {
 	resumeCommand := buildResumeCommand(file.Meta)
 	cwd := sessions.CwdForFile(file)
@@ -1742,6 +1753,7 @@ func (s *Server) buildSessionListView(file sessions.SessionFile) sessionView {
 		DisplayName:   file.DisplayName(),
 		Size:          formatBytes(file.Size),
 		ModTime:       formatTime(file.ModTime),
+		Originator:    originatorLabel(file.Meta),
 		ResumeCommand: resumeCommand,
 		Cwd:           cwd,
 		Branch:        branchForMeta(file.Meta),
@@ -1867,6 +1879,9 @@ type tokenUsageSummaryView struct {
 const tokenUsageInputCachedWarningThreshold = 272 * 1000
 
 func extractLastSnippets(file sessions.SessionFile) (sessionSnippet, sessionSnippet, bool, tokenUsageSummaryView) {
+	if file.Meta != nil && file.Meta.Originator == "kiro" {
+		return extractKiroSnippets(file)
+	}
 	snippets, err := sessions.ExtractLastConversationSnippets(file.Path)
 	if err != nil {
 		return sessionSnippet{}, sessionSnippet{}, false, tokenUsageSummaryView{}
@@ -1890,6 +1905,38 @@ func extractLastSnippets(file sessions.SessionFile) (sessionSnippet, sessionSnip
 	userSnippet.Text = snippetFromContent(userSnippet.Text, 180)
 	assistantSnippet.Text = snippetFromContent(assistantSnippet.Text, 180)
 	return userSnippet, assistantSnippet, snippets.HasUser, tokenUsageSummary(snippets.TokenUsage)
+}
+
+func extractKiroSnippets(file sessions.SessionFile) (sessionSnippet, sessionSnippet, bool, tokenUsageSummaryView) {
+	userSnippet := sessionSnippet{Title: "User", SpeakerClass: "user"}
+	assistantSnippet := sessionSnippet{Title: "Agent", SpeakerClass: "agent"}
+
+	session, err := sessions.ParseKiroSession(file.Path)
+	if err != nil {
+		return userSnippet, assistantSnippet, false, tokenUsageSummaryView{}
+	}
+
+	var lastUser, lastAssistant string
+	hasUser := false
+	for _, item := range session.Items {
+		if item.Role == "user" && strings.TrimSpace(item.Content) != "" {
+			lastUser = item.Content
+			hasUser = true
+		} else if item.Role == "assistant" && item.Subtype == "message" && strings.TrimSpace(item.Content) != "" {
+			lastAssistant = item.Content
+		}
+	}
+
+	userSnippet.Text = snippetFromContent(lastUser, 180)
+	assistantSnippet.Text = snippetFromContent(lastAssistant, 180)
+
+	// Read context usage from sidecar.
+	usage := tokenUsageSummaryView{}
+	sidecarPath := strings.TrimSuffix(file.Path, ".jsonl") + ".json"
+	if pct, ok := sessions.KiroContextUsage(sidecarPath); ok {
+		usage.Text = fmt.Sprintf("Context: %.1f%%", pct)
+	}
+	return userSnippet, assistantSnippet, hasUser, usage
 }
 
 func tokenUsageSummary(usage sessions.TokenUsageDisplay) tokenUsageSummaryView {
@@ -2261,7 +2308,7 @@ func (s *Server) buildSessionView(parts []string) (sessionPageView, error) {
 		return sessionPageView{}, errors.New("file not found")
 	}
 
-	session, err := sessions.ParseSession(file.Path)
+	session, err := sessions.ParseSessionForFile(file)
 	if err != nil {
 		return sessionPageView{}, err
 	}
@@ -2367,6 +2414,7 @@ func (s *Server) buildSessionView(parts []string) (sessionPageView, error) {
 			Size:        formatBytes(file.Size),
 			ModTime:     formatTime(file.ModTime),
 			ModTimeOnly: formatTimeOnly(file.ModTime),
+			Originator:  originatorLabel(file.Meta),
 			Cwd:         displayCwd(sessionCwd),
 			Branch:      branchForMeta(file.Meta),
 			BranchURL:   s.branchURLForMeta(file.Meta, sessionCwd),
@@ -2554,6 +2602,13 @@ func (s *Server) buildSessionItemView(item sessions.RenderItem, sessionCwd strin
 	if item.Subtype == "custom_tool_call" && item.ToolName == "apply_patch" {
 		if patchHTML := renderApplyPatchHTML(item.ToolInput); patchHTML != "" {
 			metaHTML := markdownToHTML(renderCustomToolCallMetaMarkdown(item))
+			view.HTML = template.HTML(string(metaHTML) + string(patchHTML))
+		}
+	}
+	if item.Subtype == "function_call" && item.ToolName == "write" && strings.TrimSpace(item.ToolInput) != "" {
+		if patchHTML := renderApplyPatchHTML(item.ToolInput); patchHTML != "" {
+			// Reuse the markdown content (Tool/Call ID/Path/etc.) as meta, but strip the diff block.
+			metaHTML := markdownToHTML(stripDiffBlock(item.Content))
 			view.HTML = template.HTML(string(metaHTML) + string(patchHTML))
 		}
 	}
@@ -2750,6 +2805,35 @@ func renderCustomToolCallMetaMarkdown(item sessions.RenderItem) string {
 		sections = append(sections, "**Call ID:** "+value)
 	}
 	return strings.TrimSpace(strings.Join(sections, "\n\n"))
+}
+
+// stripDiffBlock removes the trailing **Patch** label and ```diff ... ``` block
+// from markdown content. Used to avoid duplicating the diff (which is rendered
+// separately via renderApplyPatchHTML).
+func stripDiffBlock(content string) string {
+	lines := strings.Split(content, "\n")
+	out := make([]string, 0, len(lines))
+	skipping := false
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if !skipping && trimmed == "**Patch**" {
+			skipping = true
+			continue
+		}
+		if !skipping && trimmed == "```diff" {
+			skipping = true
+			continue
+		}
+		if skipping && trimmed == "```" {
+			skipping = false
+			continue
+		}
+		if skipping {
+			continue
+		}
+		out = append(out, line)
+	}
+	return strings.TrimSpace(strings.Join(out, "\n"))
 }
 
 func renderApplyPatchHTML(input string) template.HTML {

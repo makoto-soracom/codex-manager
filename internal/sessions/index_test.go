@@ -21,7 +21,7 @@ func TestIndexRefreshAndLookup(t *testing.T) {
 		t.Fatalf("chtimes: %v", err)
 	}
 
-	idx := NewIndex(base)
+	idx := NewIndex(base, "")
 	if err := idx.Refresh(); err != nil {
 		t.Fatalf("refresh: %v", err)
 	}
@@ -66,7 +66,7 @@ func TestIndexLookupByID(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 
-	idx := NewIndex(base)
+	idx := NewIndex(base, "")
 	if err := idx.Refresh(); err != nil {
 		t.Fatalf("refresh: %v", err)
 	}
@@ -94,7 +94,7 @@ func TestIndexRefreshCapturesGitBranchFromSessionMeta(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 
-	idx := NewIndex(base)
+	idx := NewIndex(base, "")
 	if err := idx.Refresh(); err != nil {
 		t.Fatalf("refresh: %v", err)
 	}
@@ -139,7 +139,7 @@ func TestIndexRefreshUsesLatestThreadName(t *testing.T) {
 		t.Fatalf("write session: %v", err)
 	}
 
-	idx := NewIndex(sessionsDir)
+	idx := NewIndex(sessionsDir, "")
 	if err := idx.Refresh(); err != nil {
 		t.Fatalf("refresh: %v", err)
 	}

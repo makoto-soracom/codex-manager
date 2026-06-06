@@ -10,7 +10,7 @@
 <body class="{{ .ThemeClass }} has-sticky-header">
   <header class="sticky-header">
     {{ template "session_top_nav" . }}
-    <p class="subtitle page-context">Last updated at: {{ .File.ModTime }} (JSONL: {{ .File.Size }})</p>
+    <p class="subtitle page-context">{{ if .File.Originator }}<span class="originator-badge originator-{{ .File.Originator }}">{{ .File.Originator }}</span> {{ end }}Last updated at: {{ .File.ModTime }} (JSONL: {{ .File.Size }})</p>
     <h1 class="page-title">{{ .File.DisplayName }}</h1>
     <div class="session-page-toolbar">
       <div class="session-page-toolbar-row session-page-thread-row">

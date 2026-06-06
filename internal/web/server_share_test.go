@@ -36,7 +36,7 @@ func TestHandleShareLocalWritesFile(t *testing.T) {
 	shareDir := filepath.Join(t.TempDir(), "shares")
 	datePath, fileName := writeTestSession(t, sessionsDir)
 
-	idx := sessions.NewIndex(sessionsDir)
+	idx := sessions.NewIndex(sessionsDir, "")
 	if err := idx.Refresh(); err != nil {
 		t.Fatalf("refresh: %v", err)
 	}
@@ -78,7 +78,7 @@ func TestHandleShareHTMLBucketSuccess(t *testing.T) {
 	shareDir := filepath.Join(t.TempDir(), "shares")
 	datePath, fileName := writeTestSession(t, sessionsDir)
 
-	idx := sessions.NewIndex(sessionsDir)
+	idx := sessions.NewIndex(sessionsDir, "")
 	if err := idx.Refresh(); err != nil {
 		t.Fatalf("refresh: %v", err)
 	}
@@ -132,7 +132,7 @@ func TestHandleShareHTMLBucketFailure(t *testing.T) {
 	shareDir := filepath.Join(t.TempDir(), "shares")
 	datePath, fileName := writeTestSession(t, sessionsDir)
 
-	idx := sessions.NewIndex(sessionsDir)
+	idx := sessions.NewIndex(sessionsDir, "")
 	if err := idx.Refresh(); err != nil {
 		t.Fatalf("refresh: %v", err)
 	}

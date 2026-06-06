@@ -124,7 +124,7 @@ func TestHandleSessionIDRedirect(t *testing.T) {
 		t.Fatalf("write session: %v", err)
 	}
 
-	idx := sessions.NewIndex(sessionsDir)
+	idx := sessions.NewIndex(sessionsDir, "")
 	if err := idx.Refresh(); err != nil {
 		t.Fatalf("refresh: %v", err)
 	}
@@ -198,7 +198,7 @@ func TestHandleRateLimitsListsTodayEventsSortedByTimestamp(t *testing.T) {
 		t.Fatalf("write newer session: %v", err)
 	}
 
-	idx := sessions.NewIndex(sessionsDir)
+	idx := sessions.NewIndex(sessionsDir, "")
 	if err := idx.Refresh(); err != nil {
 		t.Fatalf("refresh: %v", err)
 	}
@@ -280,7 +280,7 @@ func TestHandleSessionRendersContextNavigation(t *testing.T) {
 		t.Fatalf("set session mtime: %v", err)
 	}
 
-	idx := sessions.NewIndex(sessionsDir)
+	idx := sessions.NewIndex(sessionsDir, "")
 	if err := idx.Refresh(); err != nil {
 		t.Fatalf("refresh: %v", err)
 	}
@@ -343,7 +343,7 @@ func TestHandleDirShowsSessionTokenUsage(t *testing.T) {
 		t.Fatalf("write session: %v", err)
 	}
 
-	idx := sessions.NewIndex(sessionsDir)
+	idx := sessions.NewIndex(sessionsDir, "")
 	if err := idx.Refresh(); err != nil {
 		t.Fatalf("refresh: %v", err)
 	}
@@ -388,7 +388,7 @@ func TestHandleDirHighlightsHighInputCachedTokenUsage(t *testing.T) {
 		t.Fatalf("write session: %v", err)
 	}
 
-	idx := sessions.NewIndex(sessionsDir)
+	idx := sessions.NewIndex(sessionsDir, "")
 	if err := idx.Refresh(); err != nil {
 		t.Fatalf("refresh: %v", err)
 	}
@@ -437,7 +437,7 @@ func TestBuildSessionViewLinksSubagentNotification(t *testing.T) {
 		t.Fatalf("write subagent: %v", err)
 	}
 
-	idx := sessions.NewIndex(sessionsDir)
+	idx := sessions.NewIndex(sessionsDir, "")
 	if err := idx.Refresh(); err != nil {
 		t.Fatalf("refresh: %v", err)
 	}
@@ -517,7 +517,7 @@ func TestBuildSessionViewShowsSelectedResponseItemsAndSkipsEncryptedOnlyReasonin
 		t.Fatalf("write session: %v", err)
 	}
 
-	idx := sessions.NewIndex(sessionsDir)
+	idx := sessions.NewIndex(sessionsDir, "")
 	if err := idx.Refresh(); err != nil {
 		t.Fatalf("refresh: %v", err)
 	}
@@ -582,7 +582,7 @@ func TestBuildSessionViewSkipsQuerylessWebSearchCall(t *testing.T) {
 		t.Fatalf("write session: %v", err)
 	}
 
-	idx := sessions.NewIndex(sessionsDir)
+	idx := sessions.NewIndex(sessionsDir, "")
 	if err := idx.Refresh(); err != nil {
 		t.Fatalf("refresh: %v", err)
 	}
@@ -616,7 +616,7 @@ func TestBuildSessionViewFormatsExecCommandToolCallSummary(t *testing.T) {
 		t.Fatalf("write session: %v", err)
 	}
 
-	idx := sessions.NewIndex(sessionsDir)
+	idx := sessions.NewIndex(sessionsDir, "")
 	if err := idx.Refresh(); err != nil {
 		t.Fatalf("refresh: %v", err)
 	}
@@ -653,7 +653,7 @@ func TestBuildSessionViewFormatsUpdatePlanToolCallSummary(t *testing.T) {
 		t.Fatalf("write session: %v", err)
 	}
 
-	idx := sessions.NewIndex(sessionsDir)
+	idx := sessions.NewIndex(sessionsDir, "")
 	if err := idx.Refresh(); err != nil {
 		t.Fatalf("refresh: %v", err)
 	}
@@ -693,7 +693,7 @@ func TestBuildSessionViewExtractsFunctionCallOutputTextPayload(t *testing.T) {
 		t.Fatalf("write session: %v", err)
 	}
 
-	idx := sessions.NewIndex(sessionsDir)
+	idx := sessions.NewIndex(sessionsDir, "")
 	if err := idx.Refresh(); err != nil {
 		t.Fatalf("refresh: %v", err)
 	}
@@ -738,7 +738,7 @@ func TestSessionTemplateCollapsesToolOutputByDefault(t *testing.T) {
 		t.Fatalf("write session: %v", err)
 	}
 
-	idx := sessions.NewIndex(sessionsDir)
+	idx := sessions.NewIndex(sessionsDir, "")
 	if err := idx.Refresh(); err != nil {
 		t.Fatalf("refresh: %v", err)
 	}
@@ -786,7 +786,7 @@ func TestSessionTemplateFetchesMarkdownOnDemand(t *testing.T) {
 		t.Fatalf("write session: %v", err)
 	}
 
-	idx := sessions.NewIndex(sessionsDir)
+	idx := sessions.NewIndex(sessionsDir, "")
 	if err := idx.Refresh(); err != nil {
 		t.Fatalf("refresh: %v", err)
 	}
@@ -840,7 +840,7 @@ func TestSessionTemplateGroupsConsecutiveToolRunsUnderOneHeader(t *testing.T) {
 		t.Fatalf("write session: %v", err)
 	}
 
-	idx := sessions.NewIndex(sessionsDir)
+	idx := sessions.NewIndex(sessionsDir, "")
 	if err := idx.Refresh(); err != nil {
 		t.Fatalf("refresh: %v", err)
 	}
@@ -904,7 +904,7 @@ func TestSessionTemplateShowsSingleToolRunGroupHeader(t *testing.T) {
 		t.Fatalf("write session: %v", err)
 	}
 
-	idx := sessions.NewIndex(sessionsDir)
+	idx := sessions.NewIndex(sessionsDir, "")
 	if err := idx.Refresh(); err != nil {
 		t.Fatalf("refresh: %v", err)
 	}
@@ -954,7 +954,7 @@ func TestSessionTemplateShowsToolRunTokenUsageNearOutputAndGroupTotal(t *testing
 		t.Fatalf("write session: %v", err)
 	}
 
-	idx := sessions.NewIndex(sessionsDir)
+	idx := sessions.NewIndex(sessionsDir, "")
 	if err := idx.Refresh(); err != nil {
 		t.Fatalf("refresh: %v", err)
 	}
@@ -1016,7 +1016,7 @@ func TestSessionTemplateShowsSharedToolRunTokenUsageOnce(t *testing.T) {
 		t.Fatalf("write session: %v", err)
 	}
 
-	idx := sessions.NewIndex(sessionsDir)
+	idx := sessions.NewIndex(sessionsDir, "")
 	if err := idx.Refresh(); err != nil {
 		t.Fatalf("refresh: %v", err)
 	}
@@ -1076,7 +1076,7 @@ func TestSessionTemplateFoldsFinalAnswerUsageAndShowsTaskSummary(t *testing.T) {
 		t.Fatalf("write session: %v", err)
 	}
 
-	idx := sessions.NewIndex(sessionsDir)
+	idx := sessions.NewIndex(sessionsDir, "")
 	if err := idx.Refresh(); err != nil {
 		t.Fatalf("refresh: %v", err)
 	}
@@ -1136,7 +1136,7 @@ func TestHandleSessionMarkdownReturnsThreadAndGroupedLineMarkdown(t *testing.T) 
 		t.Fatalf("write session: %v", err)
 	}
 
-	idx := sessions.NewIndex(sessionsDir)
+	idx := sessions.NewIndex(sessionsDir, "")
 	if err := idx.Refresh(); err != nil {
 		t.Fatalf("refresh: %v", err)
 	}
@@ -1186,7 +1186,7 @@ func TestBuildSessionViewShowsBranchAndBranchAwareResumeCommand(t *testing.T) {
 		t.Fatalf("write session: %v", err)
 	}
 
-	idx := sessions.NewIndex(sessionsDir)
+	idx := sessions.NewIndex(sessionsDir, "")
 	if err := idx.Refresh(); err != nil {
 		t.Fatalf("refresh: %v", err)
 	}
@@ -1269,7 +1269,7 @@ func TestBuildSessionViewUsesRepositoryOverrideForBranchURL(t *testing.T) {
 		t.Fatalf("LoadStore: %v", err)
 	}
 
-	idx := sessions.NewIndex(sessionsDir)
+	idx := sessions.NewIndex(sessionsDir, "")
 	if err := idx.Refresh(); err != nil {
 		t.Fatalf("refresh: %v", err)
 	}
@@ -1317,7 +1317,7 @@ func TestBuildSessionViewOmitsSiblingSessionNavAndKeepsUserJumpControls(t *testi
 		t.Fatalf("write newer session: %v", err)
 	}
 
-	idx := sessions.NewIndex(sessionsDir)
+	idx := sessions.NewIndex(sessionsDir, "")
 	if err := idx.Refresh(); err != nil {
 		t.Fatalf("refresh: %v", err)
 	}
@@ -1368,7 +1368,7 @@ func TestBuildSessionViewRendersApplyPatchAsPatchBlock(t *testing.T) {
 		t.Fatalf("write session: %v", err)
 	}
 
-	idx := sessions.NewIndex(sessionsDir)
+	idx := sessions.NewIndex(sessionsDir, "")
 	if err := idx.Refresh(); err != nil {
 		t.Fatalf("refresh: %v", err)
 	}
@@ -1410,7 +1410,7 @@ func TestBuildSessionViewGroupsAdjacentToolCallAndOutputByCallID(t *testing.T) {
 		t.Fatalf("write session: %v", err)
 	}
 
-	idx := sessions.NewIndex(sessionsDir)
+	idx := sessions.NewIndex(sessionsDir, "")
 	if err := idx.Refresh(); err != nil {
 		t.Fatalf("refresh: %v", err)
 	}
@@ -1469,7 +1469,7 @@ func TestBuildSessionViewGroupsNonAdjacentToolCallAndOutputByCallID(t *testing.T
 		t.Fatalf("write session: %v", err)
 	}
 
-	idx := sessions.NewIndex(sessionsDir)
+	idx := sessions.NewIndex(sessionsDir, "")
 	if err := idx.Refresh(); err != nil {
 		t.Fatalf("refresh: %v", err)
 	}
@@ -1552,7 +1552,7 @@ func TestBuildSessionViewLabelsSubagentThreadConversation(t *testing.T) {
 		t.Fatalf("write subagent: %v", err)
 	}
 
-	idx := sessions.NewIndex(sessionsDir)
+	idx := sessions.NewIndex(sessionsDir, "")
 	if err := idx.Refresh(); err != nil {
 		t.Fatalf("refresh: %v", err)
 	}
@@ -1730,7 +1730,7 @@ func TestBuildSessionViewsUseDisplayNameFromSessionIndex(t *testing.T) {
 		t.Fatalf("write session: %v", err)
 	}
 
-	idx := sessions.NewIndex(sessionsDir)
+	idx := sessions.NewIndex(sessionsDir, "")
 	if err := idx.Refresh(); err != nil {
 		t.Fatalf("refresh: %v", err)
 	}

@@ -11,16 +11,17 @@ import (
 
 // Config captures runtime settings for the server.
 type Config struct {
-	SessionsDir    string
-	Addr           string
-	ShareAddr      string
-	UseTailscale   bool
-	UseHTMLBucket  bool
-	NoTrimRequest  bool
-	OpenBrowser    bool
-	RescanInterval time.Duration
-	ShareDir       string
-	Theme          int
+	SessionsDir     string
+	KiroSessionsDir string
+	Addr            string
+	ShareAddr       string
+	UseTailscale    bool
+	UseHTMLBucket   bool
+	NoTrimRequest   bool
+	OpenBrowser     bool
+	RescanInterval  time.Duration
+	ShareDir        string
+	Theme           int
 }
 
 // Parse reads CLI args into a Config.
@@ -29,6 +30,7 @@ func Parse(args []string) (Config, error) {
 	var cfg Config
 	var showHelp bool
 	fs.StringVar(&cfg.SessionsDir, "sessions-dir", "~/.codex/sessions", "Path to codex sessions directory")
+	fs.StringVar(&cfg.KiroSessionsDir, "kiro-sessions-dir", "~/.kiro/sessions/cli", "Path to Kiro CLI sessions directory")
 	fs.StringVar(&cfg.Addr, "addr", ":8080", "HTTP listen address")
 	fs.StringVar(&cfg.ShareAddr, "share-addr", ":8081", "HTTP listen address for share server")
 	fs.BoolVar(&cfg.UseTailscale, "ts", false, "Use tailscale serve/funnel for share links")
@@ -53,6 +55,12 @@ func Parse(args []string) (Config, error) {
 		return Config{}, err
 	}
 	cfg.SessionsDir = expanded
+
+	kiroDir, err := expandHome(cfg.KiroSessionsDir)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.KiroSessionsDir = kiroDir
 
 	shareDir, err := expandHome(cfg.ShareDir)
 	if err != nil {

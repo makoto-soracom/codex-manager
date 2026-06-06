@@ -94,7 +94,7 @@
               <a class="link-item-link" href="/{{ $.FallbackDate.Path }}/{{ $session.Name }}#last-item">
                 {{ $session.DisplayName }}
               </a>
-              <span class="meta">{{ $session.Size }} | {{ $session.ModTime }}{{ if $session.Cwd }} | {{ $session.Cwd }}{{ end }}{{ if $session.Branch }} | Branch: {{ $session.Branch }}{{ end }}</span>
+              <span class="meta">{{ $session.Size }} | {{ $session.ModTime }}{{ if $session.Originator }} | <span class="originator-badge originator-{{ $session.Originator }}">{{ $session.Originator }}</span>{{ end }}{{ if $session.Cwd }} | {{ $session.Cwd }}{{ end }}{{ if $session.Branch }} | Branch: {{ $session.Branch }}{{ end }}</span>
             </div>
             {{ if or $session.ThreadStatusLabel $session.ThreadStateKey }}
             <div class="active-session-actions">
@@ -173,7 +173,7 @@
               <a class="link-item-link" href="/{{ $.Date.Path }}/{{ $session.Name }}#last-item">
                 {{ $session.DisplayName }}
               </a>
-              <span class="meta">{{ $session.Size }} | {{ $session.ModTime }}{{ if $session.Cwd }} | {{ $session.Cwd }}{{ end }}{{ if $session.Branch }} | Branch: {{ $session.Branch }}{{ end }}</span>
+              <span class="meta">{{ $session.Size }} | {{ $session.ModTime }}{{ if $session.Originator }} | <span class="originator-badge originator-{{ $session.Originator }}">{{ $session.Originator }}</span>{{ end }}{{ if $session.Cwd }} | {{ $session.Cwd }}{{ end }}{{ if $session.Branch }} | Branch: {{ $session.Branch }}{{ end }}</span>
             </div>
             {{ if or $session.ThreadStatusLabel $session.ThreadStateKey }}
             <div class="active-session-actions">

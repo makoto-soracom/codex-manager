@@ -20,7 +20,7 @@ func TestHandleHookStoresNotificationAndRendersNotificationsPage(t *testing.T) {
 		t.Fatalf("mkdir: %v", err)
 	}
 
-	idx := sessions.NewIndex(sessionsDir)
+	idx := sessions.NewIndex(sessionsDir, "")
 	if err := idx.Refresh(); err != nil {
 		t.Fatalf("refresh sessions: %v", err)
 	}

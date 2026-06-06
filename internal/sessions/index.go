@@ -44,6 +44,7 @@ type SessionFile struct {
 // Index stores a snapshot of sessions on disk.
 type Index struct {
 	baseDir     string
+	kiroDir     string
 	mu          sync.RWMutex
 	byDate      map[DateKey][]SessionFile
 	byName      map[string]SessionFile
@@ -54,9 +55,10 @@ type Index struct {
 }
 
 // NewIndex creates an empty index.
-func NewIndex(baseDir string) *Index {
+func NewIndex(baseDir, kiroDir string) *Index {
 	return &Index{
 		baseDir:     baseDir,
+		kiroDir:     kiroDir,
 		byDate:      map[DateKey][]SessionFile{},
 		byName:      map[string]SessionFile{},
 		byID:        map[string]SessionFile{},
@@ -150,6 +152,13 @@ func (idx *Index) Refresh() error {
 
 	if walkErr != nil {
 		return walkErr
+	}
+
+	// Scan Kiro sessions directory (flat structure).
+	if idx.kiroDir != "" {
+		if _, err := os.Stat(idx.kiroDir); err == nil {
+			idx.refreshKiro(idx.kiroDir, byDate, byName, byID, byCwd, threadNames)
+		}
 	}
 
 	for dateKey, files := range byDate {
@@ -399,4 +408,58 @@ func shouldReplaceThreadName(current sessionThreadName, updatedAt time.Time, has
 		return false
 	}
 	return lineNum > current.line
+}
+
+// refreshKiro scans a flat Kiro sessions directory and adds entries to the maps.
+func (idx *Index) refreshKiro(dir string, byDate map[DateKey][]SessionFile, byName map[string]SessionFile, byID map[string]SessionFile, byCwd map[string][]SessionFile, threadNames map[string]string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".jsonl") {
+			continue
+		}
+		baseName := strings.TrimSuffix(entry.Name(), ".jsonl")
+		sidecarPath := filepath.Join(dir, baseName+".json")
+		if _, err := os.Stat(sidecarPath); err != nil {
+			continue
+		}
+
+		date, ok := KiroSidecarDate(sidecarPath)
+		if !ok {
+			continue
+		}
+
+		meta, err := ParseKiroSidecar(sidecarPath)
+		if err != nil {
+			continue
+		}
+
+		jsonlPath := filepath.Join(dir, entry.Name())
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+
+		file := SessionFile{
+			Date:    date,
+			Name:    entry.Name(),
+			Path:    jsonlPath,
+			Size:    info.Size(),
+			ModTime: info.ModTime(),
+			Meta:    meta,
+		}
+		if meta.ID != "" {
+			file.ThreadName = threadNames[meta.ID]
+		}
+
+		byDate[date] = append(byDate[date], file)
+		byName[path.Join(date.Path(), file.Name)] = file
+		if meta.ID != "" {
+			byID[meta.ID] = file
+		}
+		cwd := CwdForFile(file)
+		byCwd[cwd] = append(byCwd[cwd], file)
+	}
 }

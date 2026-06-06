@@ -41,7 +41,7 @@ func main() {
 		log.Fatalf("htmlbucket setup error: %v", err)
 	}
 
-	idx := sessions.NewIndex(cfg.SessionsDir)
+	idx := sessions.NewIndex(cfg.SessionsDir, cfg.KiroSessionsDir)
 	if err := idx.Refresh(); err != nil {
 		log.Printf("initial scan failed: %v", err)
 	}

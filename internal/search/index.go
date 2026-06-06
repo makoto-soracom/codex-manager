@@ -460,7 +460,7 @@ func (m lineMatcher) Matches(start, end int) bool {
 }
 
 func buildEntries(file sessions.SessionFile, matcher lineMatcher) ([]entry, error) {
-	session, err := sessions.ParseSession(file.Path)
+	session, err := sessions.ParseSessionForFile(file)
 	if err != nil {
 		return nil, err
 	}

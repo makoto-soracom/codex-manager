@@ -29,7 +29,7 @@ func TestHandleSessionShortensAssistantPathsRelativeToCwd(t *testing.T) {
 		t.Fatalf("write session: %v", err)
 	}
 
-	idx := sessions.NewIndex(sessionsDir)
+	idx := sessions.NewIndex(sessionsDir, "")
 	if err := idx.Refresh(); err != nil {
 		t.Fatalf("refresh: %v", err)
 	}

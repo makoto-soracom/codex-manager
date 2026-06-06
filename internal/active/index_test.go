@@ -39,7 +39,7 @@ func TestIndexRefreshFromBuildsTopLevelSummary(t *testing.T) {
 		t.Fatalf("write subagent session: %v", err)
 	}
 
-	idx := sessions.NewIndex(sessionsDir)
+	idx := sessions.NewIndex(sessionsDir, "")
 	if err := idx.Refresh(); err != nil {
 		t.Fatalf("refresh sessions: %v", err)
 	}
@@ -100,7 +100,7 @@ func TestIndexRefreshFromUsesThinkingPlaceholderWhenLatestUserHasNoAssistantRepl
 		t.Fatalf("write session: %v", err)
 	}
 
-	idx := sessions.NewIndex(sessionsDir)
+	idx := sessions.NewIndex(sessionsDir, "")
 	if err := idx.Refresh(); err != nil {
 		t.Fatalf("refresh sessions: %v", err)
 	}
@@ -146,7 +146,7 @@ func TestIndexRefreshFromHandlesLongJSONLLines(t *testing.T) {
 		t.Fatalf("write session: %v", err)
 	}
 
-	idx := sessions.NewIndex(sessionsDir)
+	idx := sessions.NewIndex(sessionsDir, "")
 	if err := idx.Refresh(); err != nil {
 		t.Fatalf("refresh sessions: %v", err)
 	}

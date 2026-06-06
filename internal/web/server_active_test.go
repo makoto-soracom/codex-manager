@@ -516,7 +516,7 @@ func TestWarmActiveAsyncPopulatesActiveIndex(t *testing.T) {
 func newActiveTestServer(t *testing.T, sessionsDir string) *Server {
 	t.Helper()
 
-	idx := sessions.NewIndex(sessionsDir)
+	idx := sessions.NewIndex(sessionsDir, "")
 	if err := idx.Refresh(); err != nil {
 		t.Fatalf("refresh sessions: %v", err)
 	}

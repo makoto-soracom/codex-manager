@@ -63,7 +63,7 @@ Key pages:
 - `/` date/directory browser
 - `/{session-id}` redirect by exact session ID
 - `/active` active thread list (default: today in your browser time zone)
-- `/rate-limits` today's token_count rate-limit rows, sorted by timestamp
+- `/rate-limits` token_count rate-limit chart and rows for one day, 7 days, or 30 days
 - `/notifications` received webhook notifications
 
 ## Autostart (systemd --user)

@@ -225,6 +225,14 @@ func TestHandleRateLimitsListsTodayEventsSortedByTimestamp(t *testing.T) {
 		!strings.Contains(body, "primary (used=16.0%, until=") || !strings.Contains(body, "secondary (used=1.0%, until=") {
 		t.Fatalf("expected primary and secondary used_percent values, body=%s", body)
 	}
+	if !strings.Contains(body, `class="rate-limit-chart"`) ||
+		!strings.Contains(body, `class="rate-limit-chart-line rate-limit-chart-line-primary"`) ||
+		!strings.Contains(body, `class="rate-limit-chart-line rate-limit-chart-line-secondary"`) {
+		t.Fatalf("expected rate-limit line chart, body=%s", body)
+	}
+	if !strings.Contains(body, "primary 98.0%") || !strings.Contains(body, "secondary 1.0%") {
+		t.Fatalf("expected chart marker titles with used_percent values, body=%s", body)
+	}
 	if !strings.Contains(body, "metadata (gpt-5.5,") || !strings.Contains(body, "metadata (gpt-5,") {
 		t.Fatalf("expected metadata values, body=%s", body)
 	}
@@ -239,6 +247,86 @@ func TestHandleRateLimitsListsTodayEventsSortedByTimestamp(t *testing.T) {
 	}
 	if !strings.Contains(body, "019e8158-f053-7522-bcc2-8c10c4b18105") {
 		t.Fatalf("expected session id, body=%s", body)
+	}
+}
+
+func TestHandleRateLimitsSupportsSevenAndThirtyDayRanges(t *testing.T) {
+	sessionsDir := t.TempDir()
+	writeSession := func(date string, name string, id string, timestamp string, primaryUsedPercent string) {
+		t.Helper()
+		parts := strings.Split(date, "-")
+		datePath := filepath.Join(sessionsDir, parts[0], parts[1], parts[2])
+		if err := os.MkdirAll(datePath, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", datePath, err)
+		}
+		data := "" +
+			"{\"timestamp\":\"" + date + "T00:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"" + id + "\",\"timestamp\":\"" + date + "T00:00:00Z\",\"cwd\":\"/tmp\",\"originator\":\"cli\",\"cli_version\":\"0.1\"}}\n" +
+			"{\"timestamp\":\"" + date + "T00:00:01Z\",\"type\":\"turn_context\",\"payload\":{\"model\":\"gpt-5\"}}\n" +
+			"{\"timestamp\":\"" + timestamp + "\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"rate_limits\":{\"limit_id\":\"codex\",\"primary\":{\"used_percent\":" + primaryUsedPercent + ",\"resets_at\":1780292580},\"secondary\":{\"used_percent\":2.0,\"resets_at\":1780879380},\"plan_type\":\"team\"}}}\n"
+		if err := os.WriteFile(filepath.Join(datePath, name), []byte(data), 0o600); err != nil {
+			t.Fatalf("write session %s: %v", name, err)
+		}
+	}
+
+	writeSession("2026-06-01", "today.jsonl", "session-today", "2026-06-01T12:00:00Z", "10.0")
+	writeSession("2026-05-28", "seven-day.jsonl", "session-seven-day", "2026-05-28T12:00:00Z", "20.0")
+	writeSession("2026-05-20", "thirty-day.jsonl", "session-thirty-day", "2026-05-20T12:00:00Z", "30.0")
+	writeSession("2026-05-01", "outside.jsonl", "session-outside", "2026-05-01T12:00:00Z", "40.0")
+
+	idx := sessions.NewIndex(sessionsDir, "")
+	if err := idx.Refresh(); err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+	renderer, err := render.New()
+	if err != nil {
+		t.Fatalf("renderer: %v", err)
+	}
+
+	server := NewServer(idx, nil, renderer, sessionsDir, "", "", 3)
+	req := httptest.NewRequest(http.MethodGet, "http://example.com/rate-limits?date=2026-06-01&range=7d", nil)
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: got %d body %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "2026-05-26 to 2026-06-01") {
+		t.Fatalf("expected seven-day date label, body=%s", body)
+	}
+	if !strings.Contains(body, "2026-06-01T12:00:00Z") || !strings.Contains(body, "2026-05-28T12:00:00Z") {
+		t.Fatalf("expected events inside seven-day range, body=%s", body)
+	}
+	if strings.Contains(body, "2026-05-20T12:00:00Z") || strings.Contains(body, "2026-05-01T12:00:00Z") {
+		t.Fatalf("expected events outside seven-day range to be hidden, body=%s", body)
+	}
+	if !strings.Contains(body, `class="tab active" href="/rate-limits?date=2026-06-01&amp;range=7d">7 days</a>`) {
+		t.Fatalf("expected active seven-day range tab, body=%s", body)
+	}
+	if !strings.Contains(body, `href="/rate-limits?date=2026-05-25&amp;range=7d"`) ||
+		!strings.Contains(body, `href="/rate-limits?date=2026-06-08&amp;range=7d"`) {
+		t.Fatalf("expected seven-day previous and next links, body=%s", body)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "http://example.com/rate-limits?date=2026-06-01&range=30d", nil)
+	rec = httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: got %d body %s", rec.Code, rec.Body.String())
+	}
+	body = rec.Body.String()
+	if !strings.Contains(body, "2026-05-03 to 2026-06-01") {
+		t.Fatalf("expected thirty-day date label, body=%s", body)
+	}
+	if !strings.Contains(body, "2026-05-20T12:00:00Z") {
+		t.Fatalf("expected event inside thirty-day range, body=%s", body)
+	}
+	if strings.Contains(body, "2026-05-01T12:00:00Z") {
+		t.Fatalf("expected event outside thirty-day range to be hidden, body=%s", body)
+	}
+	if !strings.Contains(body, `class="tab active" href="/rate-limits?date=2026-06-01&amp;range=30d">30 days</a>`) {
+		t.Fatalf("expected active thirty-day range tab, body=%s", body)
 	}
 }
 

@@ -598,6 +598,89 @@ main {
   gap: 8px 14px;
   align-items: baseline;
 }
+.rate-limit-chart-card {
+  overflow-x: auto;
+}
+.rate-limit-chart-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.rate-limit-chart-header h2 {
+  margin: 0;
+  font-size: 16px;
+}
+.rate-limit-chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  color: var(--muted);
+  font-size: 13px;
+}
+.rate-limit-chart-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.rate-limit-legend-swatch {
+  width: 24px;
+  height: 3px;
+  border-radius: 999px;
+  display: inline-block;
+}
+.rate-limit-legend-primary {
+  background: #63b3ed;
+}
+.rate-limit-legend-secondary {
+  background: #f6ad55;
+}
+.rate-limit-chart {
+  display: block;
+  width: 100%;
+  min-width: 720px;
+  height: auto;
+}
+.rate-limit-chart-grid line {
+  stroke: var(--border);
+  stroke-width: 1;
+}
+.rate-limit-chart-grid text {
+  fill: var(--muted);
+  font-size: 12px;
+}
+.rate-limit-chart-axis {
+  stroke: var(--border-strong);
+  stroke-width: 1.4;
+}
+.rate-limit-chart-line {
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 3;
+}
+.rate-limit-chart-line-primary {
+  stroke: #63b3ed;
+}
+.rate-limit-chart-line-secondary {
+  stroke: #f6ad55;
+}
+.rate-limit-chart-marker {
+  stroke: transparent;
+  stroke-width: 0;
+}
+.rate-limit-chart-marker-primary {
+  fill: #63b3ed;
+}
+.rate-limit-chart-marker-secondary {
+  fill: #f6ad55;
+}
+.rate-limit-chart-marker-link:hover .rate-limit-chart-marker,
+.rate-limit-chart-marker-link:focus .rate-limit-chart-marker {
+  stroke: var(--ink);
+  stroke-width: 2.5;
+}
 .mono-link {
   font-family: "SFMono-Regular", "Menlo", "Monaco", "Courier New", monospace;
 }

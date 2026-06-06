@@ -408,13 +408,59 @@ type rateLimitEventView struct {
 	SessionID            string
 	SessionColorStyle    template.CSS
 	Link                 string
+	primaryUsedPercent   *float64
+	secondaryUsedPercent *float64
+	timestampTime        time.Time
+	timestampOK          bool
+}
+
+type rateLimitChartPointView struct {
+	X     string
+	Y     string
+	Link  string
+	Title string
+}
+
+type rateLimitChartSeriesView struct {
+	Name    string
+	Class   string
+	Points  string
+	Markers []rateLimitChartPointView
+}
+
+type rateLimitChartTickView struct {
+	X     string
+	Y     string
+	Label string
+}
+
+type rateLimitChartView struct {
+	HasData   bool
+	Primary   rateLimitChartSeriesView
+	Secondary rateLimitChartSeriesView
+	YTicks    []rateLimitChartTickView
+	XTicks    []rateLimitChartTickView
+}
+
+type rateLimitRangeOptionView struct {
+	Label  string
+	Link   string
+	Active bool
 }
 
 type rateLimitsPageView struct {
 	Date         string
+	StartDate    string
+	EndDate      string
+	DateLabel    string
+	RangeLabel   string
 	PrevDate     string
 	NextDate     string
+	PrevHref     string
+	NextHref     string
+	RangeOptions []rateLimitRangeOptionView
 	Entries      []rateLimitEventView
+	Chart        rateLimitChartView
 	ThemeClass   string
 	EmptyMessage string
 }
@@ -1382,36 +1428,40 @@ func (s *Server) buildNotificationsPageView(r *http.Request) notificationsPageVi
 
 func (s *Server) buildRateLimitsPageView(r *http.Request) rateLimitsPageView {
 	loc, _ := activeLocation(r)
-	date := parseRateLimitDate(r, loc)
-	dateKey := sessions.DateKey{
-		Year:  date.Format("2006"),
-		Month: date.Format("01"),
-		Day:   date.Format("02"),
-	}
+	endDate := parseRateLimitDate(r, loc)
+	rangeDays := parseRateLimitRangeDays(r)
+	startDate := endDate.AddDate(0, 0, -(rangeDays - 1))
 
-	files := s.idx.SessionsByDate(dateKey)
 	entries := make([]rateLimitEventView, 0)
-	for _, file := range files {
-		events, err := sessions.ExtractRateLimitEvents(file.Path, file.Name)
-		if err != nil {
-			continue
-		}
-		for _, event := range events {
-			entries = append(entries, rateLimitEventView{
-				Timestamp:            event.Timestamp,
-				PrimaryUsedPercent:   formatUsedPercent(event.PrimaryUsedPercent),
-				PrimaryReset:         formatResetTime(event.PrimaryResetsAt, loc),
-				SecondaryUsedPercent: formatUsedPercent(event.SecondaryUsedPercent),
-				SecondaryReset:       formatResetTime(event.SecondaryResetsAt, loc),
-				Model:                event.Model,
-				SessionID:            event.SessionID,
-				Link:                 "/" + file.Date.Path() + "/" + url.PathEscape(file.Name) + "#line-" + strconv.Itoa(event.Line),
-			})
+	for day := startDate; !day.After(endDate); day = day.AddDate(0, 0, 1) {
+		files := s.idx.SessionsByDate(rateLimitDateKey(day))
+		for _, file := range files {
+			events, err := sessions.ExtractRateLimitEvents(file.Path, file.Name)
+			if err != nil {
+				continue
+			}
+			for _, event := range events {
+				timestampTime, timestampOK := parseTimestamp(event.Timestamp)
+				entries = append(entries, rateLimitEventView{
+					Timestamp:            event.Timestamp,
+					PrimaryUsedPercent:   formatUsedPercent(event.PrimaryUsedPercent),
+					PrimaryReset:         formatResetTime(event.PrimaryResetsAt, loc),
+					SecondaryUsedPercent: formatUsedPercent(event.SecondaryUsedPercent),
+					SecondaryReset:       formatResetTime(event.SecondaryResetsAt, loc),
+					Model:                event.Model,
+					SessionID:            event.SessionID,
+					Link:                 "/" + file.Date.Path() + "/" + url.PathEscape(file.Name) + "#line-" + strconv.Itoa(event.Line),
+					primaryUsedPercent:   event.PrimaryUsedPercent,
+					secondaryUsedPercent: event.SecondaryUsedPercent,
+					timestampTime:        timestampTime,
+					timestampOK:          timestampOK,
+				})
+			}
 		}
 	}
 	sort.SliceStable(entries, func(i, j int) bool {
-		left, leftOK := parseTimestamp(entries[i].Timestamp)
-		right, rightOK := parseTimestamp(entries[j].Timestamp)
+		left, leftOK := entries[i].timestampTime, entries[i].timestampOK
+		right, rightOK := entries[j].timestampTime, entries[j].timestampOK
 		if leftOK && rightOK && !left.Equal(right) {
 			return left.Before(right)
 		}
@@ -1421,16 +1471,33 @@ func (s *Server) buildRateLimitsPageView(r *http.Request) rateLimitsPageView {
 		return entries[i].Link < entries[j].Link
 	})
 	assignRateLimitSessionColors(entries)
+	chart := buildRateLimitChart(entries, loc, startDate, endDate, rangeDays)
 
-	prev := date.AddDate(0, 0, -1)
-	next := date.AddDate(0, 0, 1)
+	prev := endDate.AddDate(0, 0, -rangeDays)
+	next := endDate.AddDate(0, 0, rangeDays)
 	return rateLimitsPageView{
-		Date:         date.Format("2006-01-02"),
+		Date:         endDate.Format("2006-01-02"),
+		StartDate:    startDate.Format("2006-01-02"),
+		EndDate:      endDate.Format("2006-01-02"),
+		DateLabel:    rateLimitDateLabel(startDate, endDate, rangeDays),
+		RangeLabel:   rateLimitRangeLabel(rangeDays),
 		PrevDate:     prev.Format("2006-01-02"),
 		NextDate:     next.Format("2006-01-02"),
+		PrevHref:     rateLimitPageURL(prev, rangeDays),
+		NextHref:     rateLimitPageURL(next, rangeDays),
+		RangeOptions: rateLimitRangeOptions(endDate, rangeDays),
 		Entries:      entries,
+		Chart:        chart,
 		ThemeClass:   s.themeClass,
-		EmptyMessage: "No token_count rate-limit data found for this day.",
+		EmptyMessage: rateLimitEmptyMessage(rangeDays),
+	}
+}
+
+func rateLimitDateKey(date time.Time) sessions.DateKey {
+	return sessions.DateKey{
+		Year:  date.Format("2006"),
+		Month: date.Format("01"),
+		Day:   date.Format("02"),
 	}
 }
 
@@ -1446,6 +1513,80 @@ func parseRateLimitDate(r *http.Request, loc *time.Location) time.Time {
 		return startOfDay(parsed)
 	}
 	return startOfDay(time.Now().In(loc))
+}
+
+func parseRateLimitRangeDays(r *http.Request) int {
+	value := ""
+	if r != nil {
+		value = strings.TrimSpace(r.URL.Query().Get("range"))
+		if value == "" {
+			value = strings.TrimSpace(r.URL.Query().Get("days"))
+		}
+	}
+	switch strings.ToLower(value) {
+	case "", "1", "1d", "day", "today":
+		return 1
+	case "7", "7d", "week":
+		return 7
+	case "30", "30d", "month":
+		return 30
+	default:
+		return 1
+	}
+}
+
+func rateLimitDateLabel(startDate time.Time, endDate time.Time, rangeDays int) string {
+	if rangeDays <= 1 || startDate.Equal(endDate) {
+		return endDate.Format("2006-01-02")
+	}
+	return startDate.Format("2006-01-02") + " to " + endDate.Format("2006-01-02")
+}
+
+func rateLimitRangeLabel(rangeDays int) string {
+	switch rangeDays {
+	case 7:
+		return "7 days"
+	case 30:
+		return "30 days"
+	default:
+		return "day"
+	}
+}
+
+func rateLimitRangeOptions(endDate time.Time, activeDays int) []rateLimitRangeOptionView {
+	options := []struct {
+		days  int
+		label string
+	}{
+		{days: 1, label: "1 day"},
+		{days: 7, label: "7 days"},
+		{days: 30, label: "30 days"},
+	}
+	out := make([]rateLimitRangeOptionView, 0, len(options))
+	for _, option := range options {
+		out = append(out, rateLimitRangeOptionView{
+			Label:  option.label,
+			Link:   rateLimitPageURL(endDate, option.days),
+			Active: option.days == activeDays,
+		})
+	}
+	return out
+}
+
+func rateLimitPageURL(endDate time.Time, rangeDays int) string {
+	query := url.Values{}
+	query.Set("date", endDate.Format("2006-01-02"))
+	if rangeDays > 1 {
+		query.Set("range", strconv.Itoa(rangeDays)+"d")
+	}
+	return "/rate-limits?" + query.Encode()
+}
+
+func rateLimitEmptyMessage(rangeDays int) string {
+	if rangeDays <= 1 {
+		return "No token_count rate-limit data found for this day."
+	}
+	return "No token_count rate-limit data found for this range."
 }
 
 func parseTimestamp(value string) (time.Time, bool) {
@@ -1473,6 +1614,163 @@ func formatResetTime(value *int64, loc *time.Location) string {
 		loc = time.Local
 	}
 	return time.Unix(*value, 0).In(loc).Format("2006-01-02 15:04")
+}
+
+func buildRateLimitChart(entries []rateLimitEventView, loc *time.Location, startDate time.Time, endDate time.Time, rangeDays int) rateLimitChartView {
+	chart := rateLimitChartView{
+		Primary: rateLimitChartSeriesView{
+			Name:  "primary",
+			Class: "primary",
+		},
+		Secondary: rateLimitChartSeriesView{
+			Name:  "secondary",
+			Class: "secondary",
+		},
+		YTicks: []rateLimitChartTickView{
+			{Y: "20.0", Label: "100%"},
+			{Y: "69.0", Label: "75%"},
+			{Y: "118.0", Label: "50%"},
+			{Y: "167.0", Label: "25%"},
+			{Y: "216.0", Label: "0%"},
+		},
+	}
+
+	times := make([]time.Time, 0, len(entries))
+	for _, entry := range entries {
+		if entry.timestampOK && (entry.primaryUsedPercent != nil || entry.secondaryUsedPercent != nil) {
+			times = append(times, entry.timestampTime)
+		}
+	}
+	if len(times) == 0 {
+		return chart
+	}
+
+	minTime := times[0]
+	maxTime := times[0]
+	for _, timestamp := range times[1:] {
+		if timestamp.Before(minTime) {
+			minTime = timestamp
+		}
+		if timestamp.After(maxTime) {
+			maxTime = timestamp
+		}
+	}
+	if rangeDays > 1 {
+		if loc == nil {
+			loc = time.Local
+		}
+		minTime = startOfDay(startDate.In(loc))
+		maxTime = startOfDay(endDate.In(loc)).AddDate(0, 0, 1).Add(-time.Nanosecond)
+	}
+
+	const (
+		left       = 56.0
+		right      = 24.0
+		top        = 20.0
+		bottom     = 44.0
+		width      = 1000.0
+		height     = 260.0
+		plotWidth  = width - left - right
+		plotHeight = height - top - bottom
+	)
+	duration := maxTime.Sub(minTime).Seconds()
+	xForTime := func(timestamp time.Time) float64 {
+		if duration <= 0 {
+			return left + plotWidth/2
+		}
+		return left + timestamp.Sub(minTime).Seconds()/duration*plotWidth
+	}
+	yForPercent := func(value float64) float64 {
+		clamped := math.Max(0, math.Min(100, value))
+		return top + (100-clamped)/100*plotHeight
+	}
+
+	for _, entry := range entries {
+		if !entry.timestampOK {
+			continue
+		}
+		x := xForTime(entry.timestampTime)
+		if entry.primaryUsedPercent != nil {
+			addRateLimitChartPoint(&chart.Primary, entry, "primary", *entry.primaryUsedPercent, x, yForPercent(*entry.primaryUsedPercent), loc)
+		}
+		if entry.secondaryUsedPercent != nil {
+			addRateLimitChartPoint(&chart.Secondary, entry, "secondary", *entry.secondaryUsedPercent, x, yForPercent(*entry.secondaryUsedPercent), loc)
+		}
+	}
+
+	chart.HasData = len(chart.Primary.Markers) > 0 || len(chart.Secondary.Markers) > 0
+	chart.XTicks = rateLimitChartXTicks(minTime, maxTime, xForTime, loc)
+	return chart
+}
+
+func addRateLimitChartPoint(series *rateLimitChartSeriesView, entry rateLimitEventView, name string, value float64, x float64, y float64, loc *time.Location) {
+	point := rateLimitChartPointView{
+		X:     formatChartCoord(x),
+		Y:     formatChartCoord(y),
+		Link:  entry.Link,
+		Title: rateLimitChartPointTitle(name, value, entry, loc),
+	}
+	series.Markers = append(series.Markers, point)
+	if series.Points == "" {
+		series.Points = point.X + "," + point.Y
+		return
+	}
+	series.Points += " " + point.X + "," + point.Y
+}
+
+func rateLimitChartPointTitle(name string, value float64, entry rateLimitEventView, loc *time.Location) string {
+	parts := []string{
+		name + " " + strconv.FormatFloat(value, 'f', 1, 64) + "%",
+		"at " + formatChartTimestamp(entry.timestampTime, loc),
+	}
+	if strings.TrimSpace(entry.Model) != "" {
+		parts = append(parts, "model "+entry.Model)
+	}
+	if strings.TrimSpace(entry.SessionID) != "" {
+		parts = append(parts, "session "+entry.SessionID)
+	}
+	return strings.Join(parts, " / ")
+}
+
+func rateLimitChartXTicks(minTime time.Time, maxTime time.Time, xForTime func(time.Time) float64, loc *time.Location) []rateLimitChartTickView {
+	if minTime.Equal(maxTime) {
+		return []rateLimitChartTickView{{
+			X:     formatChartCoord(xForTime(minTime)),
+			Label: formatChartTimeLabel(minTime, minTime, maxTime, loc),
+		}}
+	}
+	midTime := minTime.Add(maxTime.Sub(minTime) / 2)
+	return []rateLimitChartTickView{
+		{X: formatChartCoord(xForTime(minTime)), Label: formatChartTimeLabel(minTime, minTime, maxTime, loc)},
+		{X: formatChartCoord(xForTime(midTime)), Label: formatChartTimeLabel(midTime, minTime, maxTime, loc)},
+		{X: formatChartCoord(xForTime(maxTime)), Label: formatChartTimeLabel(maxTime, minTime, maxTime, loc)},
+	}
+}
+
+func formatChartCoord(value float64) string {
+	return strconv.FormatFloat(value, 'f', 1, 64)
+}
+
+func formatChartTimeLabel(timestamp time.Time, minTime time.Time, maxTime time.Time, loc *time.Location) string {
+	if loc == nil {
+		loc = time.Local
+	}
+	local := timestamp.In(loc)
+	span := maxTime.Sub(minTime)
+	if span >= 48*time.Hour {
+		return local.Format("01-02")
+	}
+	if span >= 24*time.Hour {
+		return local.Format("01-02 15:04")
+	}
+	return local.Format("15:04")
+}
+
+func formatChartTimestamp(timestamp time.Time, loc *time.Location) string {
+	if loc == nil {
+		loc = time.Local
+	}
+	return timestamp.In(loc).Format("2006-01-02 15:04:05")
 }
 
 func assignRateLimitSessionColors(entries []rateLimitEventView) {

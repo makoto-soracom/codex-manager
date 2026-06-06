@@ -11,15 +11,65 @@
   <header>
     {{ template "top_nav" . }}
     <h1 class="page-title">Rate limits</h1>
-    <p class="subtitle">token_count events for {{ .Date }}, sorted by timestamp.</p>
+    <p class="subtitle">token_count events for {{ .DateLabel }}, sorted by timestamp.</p>
+    <div class="tabs tabs-secondary" aria-label="Rate-limit date range">
+      {{ range .RangeOptions }}
+      <a class="tab{{ if .Active }} active{{ end }}" href="{{ .Link }}">{{ .Label }}</a>
+      {{ end }}
+    </div>
     <div class="pagination">
-      <a class="nav-btn" href="/rate-limits?date={{ .PrevDate }}">⬅️ {{ .PrevDate }}</a>
-      <span class="page-meta">{{ .Date }}</span>
-      <a class="nav-btn" href="/rate-limits?date={{ .NextDate }}">{{ .NextDate }} ➡️</a>
+      <a class="nav-btn" href="{{ .PrevHref }}">⬅️ Previous {{ .RangeLabel }}</a>
+      <span class="page-meta">{{ .DateLabel }}</span>
+      <a class="nav-btn" href="{{ .NextHref }}">Next {{ .RangeLabel }} ➡️</a>
     </div>
   </header>
   <main>
     {{ if .Entries }}
+    {{ if .Chart.HasData }}
+    <div class="card rate-limit-chart-card">
+      <div class="rate-limit-chart-header">
+        <h2>Used percent trend</h2>
+        <div class="rate-limit-chart-legend" aria-label="Rate-limit graph legend">
+          <span><i class="rate-limit-legend-swatch rate-limit-legend-primary"></i>primary</span>
+          <span><i class="rate-limit-legend-swatch rate-limit-legend-secondary"></i>secondary</span>
+        </div>
+      </div>
+      <svg class="rate-limit-chart" viewBox="0 0 1000 260" role="img" aria-labelledby="rate-limit-chart-title rate-limit-chart-desc">
+        <title id="rate-limit-chart-title">Rate-limit used_percent for {{ .DateLabel }}</title>
+        <desc id="rate-limit-chart-desc">Line graph of primary and secondary used_percent values from token_count events.</desc>
+        <g class="rate-limit-chart-grid" aria-hidden="true">
+          {{ range .Chart.YTicks }}
+          <line x1="56" y1="{{ .Y }}" x2="976" y2="{{ .Y }}"></line>
+          <text x="48" y="{{ .Y }}" dy="4" text-anchor="end">{{ .Label }}</text>
+          {{ end }}
+          {{ range .Chart.XTicks }}
+          <line x1="{{ .X }}" y1="20" x2="{{ .X }}" y2="216"></line>
+          <text x="{{ .X }}" y="240" text-anchor="middle">{{ .Label }}</text>
+          {{ end }}
+        </g>
+        <line class="rate-limit-chart-axis" x1="56" y1="216" x2="976" y2="216" aria-hidden="true"></line>
+        <line class="rate-limit-chart-axis" x1="56" y1="20" x2="56" y2="216" aria-hidden="true"></line>
+        {{ if .Chart.Primary.Points }}
+        <polyline class="rate-limit-chart-line rate-limit-chart-line-primary" points="{{ .Chart.Primary.Points }}"></polyline>
+        {{ end }}
+        {{ if .Chart.Secondary.Points }}
+        <polyline class="rate-limit-chart-line rate-limit-chart-line-secondary" points="{{ .Chart.Secondary.Points }}"></polyline>
+        {{ end }}
+        {{ range .Chart.Primary.Markers }}
+        <a class="rate-limit-chart-marker-link" href="{{ .Link }}">
+          <title>{{ .Title }}</title>
+          <circle class="rate-limit-chart-marker rate-limit-chart-marker-primary" cx="{{ .X }}" cy="{{ .Y }}" r="3"></circle>
+        </a>
+        {{ end }}
+        {{ range .Chart.Secondary.Markers }}
+        <a class="rate-limit-chart-marker-link" href="{{ .Link }}">
+          <title>{{ .Title }}</title>
+          <circle class="rate-limit-chart-marker rate-limit-chart-marker-secondary" cx="{{ .X }}" cy="{{ .Y }}" r="3"></circle>
+        </a>
+        {{ end }}
+      </svg>
+    </div>
+    {{ end }}
     <div class="card">
       <ul class="list link-list rate-limit-list">
         {{ range .Entries }}
